@@ -1,0 +1,6 @@
+repositories:
+  # SO-101 URDF/xacro descriptions (BSD-3-Clause). Same pin as ros-physical-ai/demos.
+  ros2_so_arm:
+    type: git
+    url: https://github.com/ros-physical-ai/ros2_so_arm.git
+    version: 12fbcb8cf30da7c3d679db384c43765ea311eb18

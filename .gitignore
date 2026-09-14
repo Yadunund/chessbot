@@ -1,0 +1,22 @@
+# pixi
+.pixi/
+
+# vcstool imports (see chessbot.repos)
+external/
+
+# colcon
+build/
+install/
+log/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# generated
+generated/
+
+# OS
+.DS_Store

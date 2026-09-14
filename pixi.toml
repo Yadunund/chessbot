@@ -1,0 +1,54 @@
+[workspace]
+name = "chessbot"
+authors = ["Yadunund Vijay <yadunund@gmail.com>"]
+description = "Play chess against a real robot arm"
+license = "Apache-2.0"
+channels = ["conda-forge", "https://prefix.dev/robostack-lyrical"]
+platforms = ["linux-aarch64", "linux-64", "osx-arm64"]
+version = "0.1.0"
+
+# License policy: every dependency must be Apache-2.0 compatible.
+# See docs/licensing.md before adding anything here.
+
+[dependencies]
+# robostack-lyrical only publishes py314 builds.
+python = "3.14.*"
+numpy = ">=2.3,<3"
+scipy = "*"
+pinocchio = ">=4,<5"
+
+# Build / workspace tooling
+colcon-common-extensions = "*"
+cmake = ">=3.30,<4"
+ninja = "*"
+c-compiler = "*"
+cxx-compiler = "*"
+vcstool = "*"
+make = "*"
+curl = "*"
+
+# ROS 2 (only what is needed so far: building and expanding robot descriptions)
+ros-lyrical-ament-cmake = "*"
+ros-lyrical-ament-cmake-python = "*"
+ros-lyrical-xacro = "*"
+
+[feature.dev.dependencies]
+pytest = "*"
+ruff = "*"
+
+[environments]
+dev = ["dev"]
+
+[activation.env]
+CMAKE_PREFIX_PATH = "${CONDA_PREFIX}"
+ROS_DISTRO = "lyrical"
+PYTHONNOUSERSITE = "1"
+
+[tasks]
+import-deps = { cmd = "mkdir -p external && vcs import external < chessbot.repos" }
+build = { cmd = "colcon build --symlink-install --base-paths external --packages-up-to so_arm101_description", depends-on = ["import-deps"] }
+so101-urdf = { cmd = "bash -c 'source install/setup.bash && mkdir -p generated && xacro install/so_arm101_description/share/so_arm101_description/urdf/so_arm101.urdf.xacro > generated/so101.urdf'", depends-on = ["build"] }
+reach-check = { cmd = "python tools/reach_check.py --urdf generated/so101.urdf", depends-on = ["so101-urdf"] }
+
+[feature.dev.tasks]
+lint = "ruff check . && ruff format --check ."
