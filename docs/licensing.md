@@ -22,6 +22,12 @@ The web frontend is written in-house with no third-party JavaScript.
 | KDL (orocos_kinematics_dynamics) | LGPL-2.1 | Pinocchio |
 | Depth Anything V2 Base/Large/Giant weights | CC-BY-NC-4.0 | Depth Anything V2 Small |
 
-## Open
+## Executables we run but do not link
 
-- **Chess engine.** Stockfish is GPL-3.0; how it may be used is undecided.
+| Program | License | How it is used |
+|---|---|---|
+| Stockfish | GPL-3.0 | Built from pinned, unmodified upstream source by `pixi run stockfish` into a separate executable. Driven only over UCI stdin/stdout from our own client. Never linked, vendored, or modified. |
+
+Running a separate program over pipes is generally treated as aggregation rather than a combined work, so our code stays Apache-2.0.
+
+If we ever distribute a pre-built image that includes the Stockfish binary, that image must also ship Stockfish's GPL-3.0 license text and offer its corresponding source.

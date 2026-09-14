@@ -4,3 +4,10 @@ repositories:
     type: git
     url: https://github.com/ros-physical-ai/ros2_so_arm.git
     version: 12fbcb8cf30da7c3d679db384c43765ea311eb18
+  # Chess engine (GPL-3.0). Built from unmodified upstream source into a separate
+  # executable and driven over UCI pipes only; never linked or vendored.
+  # See docs/licensing.md. Tag sf_19.
+  Stockfish:
+    type: git
+    url: https://github.com/official-stockfish/Stockfish.git
+    version: edb0d9db6731067ec50ce619ff372b463bc4dd5d

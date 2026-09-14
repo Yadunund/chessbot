@@ -49,6 +49,11 @@ import-deps = { cmd = "mkdir -p external && vcs import external < chessbot.repos
 build = { cmd = "colcon build --symlink-install --base-paths external --packages-up-to so_arm101_description", depends-on = ["import-deps"] }
 so101-urdf = { cmd = "bash -c 'source install/setup.bash && mkdir -p generated && xacro install/so_arm101_description/share/so_arm101_description/urdf/so_arm101.urdf.xacro > generated/so101.urdf'", depends-on = ["build"] }
 reach-check = { cmd = "python tools/reach_check.py --urdf generated/so101.urdf", depends-on = ["so101-urdf"] }
+# Stockfish: separate GPL-3.0 executable, built from pinned upstream source for the host CPU.
+stockfish = { cmd = "make -C external/Stockfish/src -j build ARCH=native COMP=gcc COMPCXX=$CXX && mkdir -p generated/bin && cp external/Stockfish/src/stockfish generated/bin/", depends-on = ["import-deps"] }
+
+[target.osx-arm64.tasks]
+stockfish = { cmd = "make -C external/Stockfish/src -j build ARCH=native COMP=clang COMPCXX=$CXX && mkdir -p generated/bin && cp external/Stockfish/src/stockfish generated/bin/", depends-on = ["import-deps"] }
 
 [feature.dev.tasks]
 lint = "ruff check . && ruff format --check ."

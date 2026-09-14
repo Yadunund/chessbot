@@ -12,6 +12,7 @@ Requires [pixi](https://pixi.sh). Supported platforms: `linux-aarch64`, `linux-6
 
 ```bash
 pixi run reach-check   # imports the SO-101 description, builds it, and checks board reachability
+pixi run stockfish     # builds the Stockfish engine from pinned upstream source for this CPU
 ```
 
 `reach-check` reports, for each square, the gripper tilt from vertical needed to pick and carry a piece. It also finds the board placement that minimises the worst-case tilt. Defaults are a 21 cm board; see `python tools/reach_check.py --help`.
