@@ -1,0 +1,106 @@
+<?xml version="1.0" ?>
+<!--
+  SO-101 for chessbot, in simulation.
+
+  Reuses the upstream so_arm101_description macro, adds the chessbot cameras,
+  the Gazebo camera sensors, and the gz_ros2_control plugin.
+
+  Adapted from ros-physical-ai/demos pai_bringup/urdf/so_arm_gz.urdf.xacro (Apache-2.0).
+-->
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="chessbot_so101">
+  <xacro:arg name="prefix" default="" />
+  <xacro:arg name="hardware" default="gazebo" />
+  <xacro:arg name="usb_port" default="/dev/so101" />
+  <xacro:arg name="controllers_file" default="" />
+  <xacro:arg name="color" default="0.2 0.7 0.85 1.0" />
+  <xacro:arg name="overhead_xyz" default="0.234 0.0 0.51" />
+  <xacro:arg name="overhead_rpy" default="3.14159 0.0 -1.5708" />
+
+  <xacro:include filename="$(find so_arm101_description)/urdf/so_arm101_macro.xacro" />
+  <xacro:include filename="$(find chessbot_description)/urdf/cameras.xacro" />
+  <xacro:include filename="$(find chessbot_description)/urdf/so101.ros2_control.xacro" />
+
+  <link name="world" />
+  <xacro:so_arm101 prefix="$(arg prefix)" parent="world" color="$(arg color)"
+                   x="0" y="0" z="0" roll="0" pitch="0" yaw="0" />
+
+  <xacro:chessbot_cameras prefix="$(arg prefix)"
+                          overhead_xyz="$(arg overhead_xyz)"
+                          overhead_rpy="$(arg overhead_rpy)"
+                          include_inertia="true" />
+
+  <xacro:chessbot_ros2_control prefix="$(arg prefix)" hardware="$(arg hardware)" usb_port="$(arg usb_port)" />
+
+  <!-- Fixed camera joints would otherwise be collapsed by the URDF to SDF conversion. -->
+  <gazebo reference="overhead_camera_joint">
+    <preserveFixedJoint>true</preserveFixedJoint>
+  </gazebo>
+  <gazebo reference="$(arg prefix)wrist_camera_joint">
+    <preserveFixedJoint>true</preserveFixedJoint>
+  </gazebo>
+
+  <!--
+    Gazebo camera sensors. The camera links use the ROS optical convention
+    (Z forward, X right, Y down); Gazebo sensors look along +X with +Z up, so
+    the sensor pose rotates pitch=-pi/2, yaw=+pi/2 to compensate.
+  -->
+  <gazebo reference="overhead_camera_link">
+    <sensor name="overhead_camera" type="camera">
+      <gz_frame_id>overhead_camera_link</gz_frame_id>
+      <pose>0 0 0 0 -1.5708 1.5708</pose>
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <camera>
+        <horizontal_fov>1.0472</horizontal_fov>
+        <image>
+          <width>1280</width>
+          <height>720</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.01</near>
+          <far>10</far>
+        </clip>
+      </camera>
+      <topic>overhead_camera/image_raw</topic>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="$(arg prefix)wrist_camera_link">
+    <sensor name="wrist_camera" type="camera">
+      <gz_frame_id>wrist_camera_link</gz_frame_id>
+      <pose>0 0 0 0 -1.5708 1.5708</pose>
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <camera>
+        <horizontal_fov>1.5708</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.01</near>
+          <far>10</far>
+        </clip>
+      </camera>
+      <topic>wrist_camera/image_raw</topic>
+    </sensor>
+  </gazebo>
+
+  <!-- Gripper friction so grasped pieces do not slide. -->
+  <gazebo reference="$(arg prefix)jaw_link">
+    <mu>0.8</mu>
+    <mu2>0.8</mu2>
+  </gazebo>
+  <gazebo reference="$(arg prefix)gripper_link">
+    <mu>0.8</mu>
+    <mu2>0.8</mu2>
+  </gazebo>
+
+  <gazebo>
+    <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(arg controllers_file)</parameters>
+    </plugin>
+  </gazebo>
+</robot>

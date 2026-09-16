@@ -1,0 +1,34 @@
+# Controllers for the SO-101.
+#
+# The arm is driven by a joint trajectory controller (the brain sends planned
+# trajectories); the gripper is driven separately between trajectory segments.
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+    enforce_command_limits: false
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    gripper_controller:
+      type: parallel_gripper_action_controller/GripperActionController
+
+arm_controller:
+  ros__parameters:
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_flex_joint
+      - wrist_flex_joint
+      - wrist_roll_joint
+    allow_partial_joints_goal: false
+
+gripper_controller:
+  ros__parameters:
+    joint: gripper_joint
+    allow_stalling: true

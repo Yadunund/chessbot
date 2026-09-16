@@ -1,0 +1,59 @@
+<?xml version="1.0" ?>
+<!--
+  Camera frames for chessbot.
+
+  Two cameras, per the camera analysis: an overhead camera on a mast rigidly
+  attached to the robot base plate, and a wrist camera on the gripper.
+
+  Both links use the ROS optical convention (Z forward, X right, Y down) so
+  robot_state_publisher publishes usable TF for them.
+
+  Adapted from ros-physical-ai/demos pai_bringup/urdf/cameras.xacro (Apache-2.0).
+-->
+<robot xmlns:xacro="http://wiki.ros.org/xacro">
+  <xacro:macro name="chessbot_cameras"
+    params="
+      prefix:=''
+      overhead_xyz:='0.234 0.0 0.51'
+      overhead_rpy:='3.14159 0.0 -1.5708'
+      wrist_xyz:='0.0 0.065 -0.03'
+      wrist_rpy:='2.618 0.0 0.0'
+      include_inertia:='false'
+    ">
+
+    <!-- Overhead camera: on the mast, looking straight down at the board centre.
+         Default pose is 51 cm above the table, over the centre of a 21 cm board
+         whose near edge sits 9 cm from the pan axis. -->
+    <link name="overhead_camera_link">
+      <xacro:if value="${include_inertia}">
+        <inertial>
+          <mass value="0.001" />
+          <inertia ixx="1e-7" ixy="0" ixz="0" iyy="1e-7" iyz="0" izz="1e-7" />
+        </inertial>
+      </xacro:if>
+    </link>
+
+    <joint name="overhead_camera_joint" type="fixed">
+      <parent link="${prefix}base_link" />
+      <child link="overhead_camera_link" />
+      <origin xyz="${overhead_xyz}" rpy="${overhead_rpy}" />
+    </joint>
+
+    <!-- Wrist camera: moves with the gripper, used for grasp alignment. -->
+    <link name="${prefix}wrist_camera_link">
+      <xacro:if value="${include_inertia}">
+        <inertial>
+          <mass value="0.001" />
+          <inertia ixx="1e-7" ixy="0" ixz="0" iyy="1e-7" iyz="0" izz="1e-7" />
+        </inertial>
+      </xacro:if>
+    </link>
+
+    <joint name="${prefix}wrist_camera_joint" type="fixed">
+      <parent link="${prefix}gripper_link" />
+      <child link="${prefix}wrist_camera_link" />
+      <origin xyz="${wrist_xyz}" rpy="${wrist_rpy}" />
+    </joint>
+
+  </xacro:macro>
+</robot>

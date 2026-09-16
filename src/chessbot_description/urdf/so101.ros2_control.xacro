@@ -1,0 +1,48 @@
+<?xml version="1.0" ?>
+<!--
+  ros2_control description for the SO-101.
+
+  One hardware plugin per mode, so the same controllers and the same interfaces
+  serve simulation, a dry run, and the real arm.
+
+  Adapted from ros-physical-ai/demos (Apache-2.0).
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="chessbot_ros2_control" params="prefix hardware usb_port:='/dev/so101'">
+    <ros2_control name="SO_ARM101" type="system">
+      <hardware>
+        <xacro:if value="${hardware == 'gazebo'}">
+          <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+        </xacro:if>
+        <xacro:if value="${hardware == 'mock'}">
+          <plugin>mock_components/GenericSystem</plugin>
+        </xacro:if>
+        <xacro:if value="${hardware == 'real'}">
+          <plugin>feetech_ros2_driver/FeetechHardwareInterface</plugin>
+          <param name="usb_port">${usb_port}</param>
+        </xacro:if>
+      </hardware>
+
+      <!-- PID gains are read by gz_ros2_control only. -->
+      <xacro:macro name="arm_joint" params="name initial_position:=0.0">
+        <joint name="${name}">
+          <param name="initial_position">${initial_position}</param>
+          <command_interface name="position">
+            <param name="p">100.0</param>
+            <param name="i">0.1</param>
+            <param name="d">10.0</param>
+          </command_interface>
+          <state_interface name="position" />
+          <state_interface name="velocity" />
+        </joint>
+      </xacro:macro>
+
+      <xacro:arm_joint name="${prefix}shoulder_pan_joint" />
+      <xacro:arm_joint name="${prefix}shoulder_lift_joint" />
+      <xacro:arm_joint name="${prefix}elbow_flex_joint" />
+      <xacro:arm_joint name="${prefix}wrist_flex_joint" />
+      <xacro:arm_joint name="${prefix}wrist_roll_joint" />
+      <xacro:arm_joint name="${prefix}gripper_joint" />
+    </ros2_control>
+  </xacro:macro>
+</robot>
