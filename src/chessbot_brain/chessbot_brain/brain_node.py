@@ -25,22 +25,26 @@ from concurrent.futures import ThreadPoolExecutor
 
 import rclpy
 import uvicorn
+from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from builtin_interfaces.msg import Time
 from chessbot_interfaces.msg import GameState, Thought
 from chessbot_interfaces.srv import GetBoardState
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
 
 from chessbot_brain import skills
 from chessbot_brain.board import Board, piece_colour
 from chessbot_brain.capabilities import ArmConfig, Capabilities, CapabilityError
 from chessbot_brain.engine import EngineError, UciEngine, choose_reply
-from chessbot_brain.geometry import BoardGeometry
+from chessbot_brain.geometry import BoardGeometry, graveyard_cell
 
 PHASE_NAMES = {
     GameState.PHASE_IDLE: "idle",
@@ -70,6 +74,9 @@ BOARD_RESULT_TEXT = {
 }
 
 
+MESH_EXTENSIONS = {".stl", ".dae", ".obj", ".glb", ".gltf"}
+
+
 class Busy(RuntimeError):
     pass
 
@@ -80,6 +87,7 @@ class BrainNode(Node):
         self.rest_port = int(self.declare_parameter("rest_port", 8000).value)
         self.web_root = self.declare_parameter("web_root", "").value
         self.default_robot_side = self.declare_parameter("robot_side", "black").value
+        self.robot_name = self.declare_parameter("robot_name", "SO-101").value
         self.time_control_ms = int(self.declare_parameter("time_control_ms", 600_000).value)
         self.park_joints = list(self.declare_parameter("park_joints", [0.0, -1.6, 1.55, 0.9, 0.0]).value)
         arm = ArmConfig(
@@ -102,6 +110,9 @@ class BrainNode(Node):
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
         self.state_pub = self.create_publisher(GameState, "/chessbot/game_state", latched)
         self.thought_pub = self.create_publisher(Thought, "/chessbot/thoughts", 50)
+        # Kept for the UI's 3D view, which draws the robot from its URDF.
+        self.robot_description = ""
+        self.create_subscription(String, "/robot_description", self._on_robot_description, latched)
 
         self.caps = Capabilities(self, arm, zenoh_endpoint)
 
@@ -137,11 +148,15 @@ class BrainNode(Node):
             self.moves: list[str] = []
             self.robot_side = robot_side
             self.result = GameState.RESULT_IN_PROGRESS
-            self.graveyard = {"white": 0, "black": 0}
+            # Pieces the robot has put in each graveyard, in slot order.
+            self.graveyard: dict[str, list[str]] = {"white": [], "black": []}
             self.white_ms = self.time_control_ms
             self.black_ms = self.time_control_ms
             self.clock_running = GameState.CLOCK_NONE
             self.clock_last_switch = time.time()
+
+    def _on_robot_description(self, msg: String):
+        self.robot_description = msg.data
 
     def side_to_move(self) -> str:
         return "white" if self.board.white_to_move else "black"
@@ -200,7 +215,14 @@ class BrainNode(Node):
                 "fen": self.board.fen(),
                 "turn": self.side_to_move(),
                 "robot_side": self.robot_side,
+                "robot_name": self.robot_name,
                 "moves": list(self.moves),
+                # Pieces the robot has captured, where it put them (board frame, in squares).
+                "graveyard": [
+                    {"piece": piece, "cell": graveyard_cell(colour, slot)}
+                    for colour, pieces in self.graveyard.items()
+                    for slot, piece in enumerate(pieces)
+                ],
                 "result": self.result,
                 "engine_elo": self.engine_elo,
                 "clock": {
@@ -407,6 +429,8 @@ class DemoTransfer(BaseModel):
 def build_app(node: BrainNode) -> FastAPI:
     app = FastAPI(title="chessbot brain")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    # Meshes and the vendored renderer are large and compress well.
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
 
     def submit(name, fn, *args):
         try:
@@ -444,6 +468,27 @@ def build_app(node: BrainNode) -> FastAPI:
     @app.post("/api/demo_transfer")
     def demo_transfer(body: DemoTransfer):
         return submit("demo_transfer", node.job_demo_transfer, body.src, body.dst)
+
+    @app.get("/api/robot_description")
+    def robot_description():
+        if not node.robot_description:
+            raise HTTPException(status_code=503, detail="no robot_description received yet")
+        return Response(node.robot_description, media_type="application/xml")
+
+    @app.get("/packages/{package}/{path:path}")
+    def package_file(package: str, path: str):
+        """Resolves the URDF's package:// mesh URIs for the browser (meshes only)."""
+        if os.path.splitext(path)[1].lower() not in MESH_EXTENSIONS:
+            raise HTTPException(status_code=404)
+        try:
+            share = os.path.normpath(get_package_share_directory(package))
+        except (PackageNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404) from exc
+        # normpath, not realpath: symlink-installed files point outside the share directory.
+        full = os.path.normpath(os.path.join(share, path))
+        if not full.startswith(share + os.sep) or not os.path.isfile(full):
+            raise HTTPException(status_code=404)
+        return FileResponse(full)
 
     if node.web_root and os.path.isdir(node.web_root):
         # follow_symlink: a --symlink-install workspace installs the files as symlinks.

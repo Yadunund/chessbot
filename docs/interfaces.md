@@ -14,8 +14,8 @@ contract. For example, `chessbot_motion` could be replaced by MoveIt.
 | Boundary | Interface | Type | Owner (server / publisher) | Consumers |
 |---|---|---|---|---|
 | Camera frames | `/overhead_camera/image_raw`, `/wrist_camera/image_raw` (+ `camera_info`) | `sensor_msgs/Image` topic | camera driver (ros_gz bridge in sim) | perception, Rerun bridge |
-| Robot model | `/robot_description` | `std_msgs/String` topic, latched | robot_state_publisher | motion |
-| Joint state | `/joint_states` | `sensor_msgs/JointState` topic | ros2_control `joint_state_broadcaster` | motion, brain, Rerun bridge |
+| Robot model | `/robot_description` | `std_msgs/String` topic, latched | robot_state_publisher | motion, brain (serves it to the UI) |
+| Joint state | `/joint_states` | `sensor_msgs/JointState` topic | ros2_control `joint_state_broadcaster` | motion, brain, Rerun bridge, UI 3D view |
 | Transforms | `/tf`, `/tf_static` | `tf2_msgs/TFMessage` | robot_state_publisher | anyone |
 | Board facts | `/perception/get_board_state` | `chessbot_interfaces/srv/GetBoardState` | `chessbot_perception` (C++, in `robot_io`) | brain |
 | IK | `/compute_ik` | `moveit_msgs/srv/GetPositionIK` | `chessbot_motion` | brain |
@@ -28,13 +28,16 @@ contract. For example, `chessbot_motion` could be replaced by MoveIt.
 | Reasoning | `/chessbot/thoughts` | `chessbot_interfaces/msg/Thought` topic | brain | UI (SSE), recorder |
 | UI commands + snapshot | `http://<host>:8000/api/*` | REST (JSON) | brain | UI, scripts |
 | Browser read path | `http://<host>:8080/0/<topic>/**` | Zenoh REST plugin, Server-Sent Events, base64 CDR | Zenoh router | UI |
+| Browser calibration read | `http://<host>:8080/chessbot/kv/calibration` | Zenoh REST plugin GET, JSON | Zenoh router (key-value store) | UI 3D view |
 | Visualisation | `rerun+http://<host>:9876/proxy` | Rerun gRPC | `rerun_ros_bridge` (C++, in `robot_io`) | Rerun viewer |
 
 ## Brain REST API
 
 | Method | Path | Body | Effect |
 |---|---|---|---|
-| GET | `/api/state` | — | snapshot: phase, FEN, moves, clocks, recent thoughts, capability availability, last error |
+| GET | `/api/state` | — | snapshot: phase, FEN, moves, clocks, robot name, graveyard (pieces the robot captured, with their slot in board squares), recent thoughts, capability availability, last error |
+| GET | `/api/robot_description` | — | the latest `/robot_description` URDF, for the UI's 3D view (503 until received) |
+| GET | `/packages/<package>/<path>` | — | resolves the URDF's `package://` mesh URIs (mesh files only) |
 | POST | `/api/new_game` | `{"robot_side": "black"\|"white", "engine_elo": 0}` | reset the game; the robot moves first if white |
 | POST | `/api/press_clock` | `{"move": "e2e4"}` (optional) | end the human's turn. Until camera move detection exists, the move must be given |
 | POST | `/api/calibrate` | — | run the calibration action |

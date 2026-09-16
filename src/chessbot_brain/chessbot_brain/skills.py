@@ -74,22 +74,23 @@ def execute_chess_move(
     caps: Capabilities,
     geometry: BoardGeometry,
     effects: MoveEffects,
-    graveyard_counts: dict[str, int],
+    graveyard: dict[str, list[str]],
     narrate: Narrate,
 ):
     """Carry out a move physically, including its side effects.
 
-    Captures first (the captured piece goes to the next free graveyard slot),
+    Captures first (the captured piece goes to the next free graveyard slot and
+    is recorded in ``graveyard``),
     then the moving piece, then the castling rook. Promotion pieces are not
     fetched yet: the pawn is left on the promotion square.
     """
     src, dst = effects.uci[:2], effects.uci[2:4]
     if effects.captured and effects.capture_square:
         colour = piece_colour(effects.captured)
-        slot = graveyard_counts[colour]
+        slot = len(graveyard[colour])
         narrate(f"Capture: moving {effects.captured} from {effects.capture_square} to graveyard slot {colour}/{slot}.")
         transfer(caps, geometry.square_centre(effects.capture_square), geometry.graveyard_slot(colour, slot))
-        graveyard_counts[colour] += 1
+        graveyard[colour].append(effects.captured)
     narrate(f"Moving {src} to {dst}.")
     transfer(caps, geometry.square_centre(src), geometry.square_centre(dst))
     if effects.rook_from and effects.rook_to:

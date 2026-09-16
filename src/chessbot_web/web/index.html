@@ -17,7 +17,27 @@
 
   <main class="layout">
     <section class="board-col">
-      <div id="board" class="board" aria-label="Board"></div>
+      <div class="segmented view-switch" role="radiogroup" aria-label="Board view">
+        <label><input type="radio" name="view" value="player" checked /><span>3D</span></label>
+        <label><input type="radio" name="view" value="top" /><span>Top down</span></label>
+        <label><input type="radio" name="view" value="2d" /><span>2D</span></label>
+      </div>
+      <div class="player-strip" id="robot-strip">
+        <span class="chip" id="robot-chip"></span>
+        <span class="who"><span id="robot-name">Robot</span> <span class="side" id="robot-side"></span></span>
+        <span class="status" id="robot-status"></span>
+        <span class="time" id="robot-time">--:--</span>
+      </div>
+      <div class="stage">
+        <div id="scene" class="scene" aria-label="3D board" hidden><p class="scene-note" id="scene-note">Loading robot…</p></div>
+        <div id="board" class="board" aria-label="Board"></div>
+      </div>
+      <div class="player-strip" id="human-strip">
+        <span class="chip" id="human-chip"></span>
+        <span class="who">You <span class="side" id="human-side"></span></span>
+        <span class="status" id="human-status"></span>
+        <span class="time" id="human-time">--:--</span>
+      </div>
       <div class="moves" id="moves"></div>
     </section>
 
@@ -81,6 +101,9 @@
   </main>
   </div>
 
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+  </script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

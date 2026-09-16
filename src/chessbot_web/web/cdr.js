@@ -32,6 +32,7 @@ export class CdrReader {
     this.pos += 8;
     return Number(v);
   }
+  float64() { this.align(8); const v = this.view.getFloat64(this.pos, true); this.pos += 8; return v; }
   string() {
     const length = this.uint32(); // includes the trailing NUL
     const text = new TextDecoder().decode(this.bytes.subarray(this.pos, this.pos + Math.max(0, length - 1)));
@@ -79,4 +80,10 @@ export function decodeGameState(bytes) {
 export function decodeThought(bytes) {
   const r = new CdrReader(bytes);
   return { header: r.header(), kind: r.uint8(), text: r.string(), model_generated: r.bool() };
+}
+
+// sensor_msgs/msg/JointState (velocity and effort are not needed)
+export function decodeJointState(bytes) {
+  const r = new CdrReader(bytes);
+  return { header: r.header(), name: r.sequence((x) => x.string()), position: r.sequence((x) => x.float64()) };
 }
