@@ -98,6 +98,38 @@
     <mu2>0.8</mu2>
   </gazebo>
 
+  <!--
+    Contact sensors on the moving links, for motion testing (tools/sim). Each publishes on
+    /world/<world>/model/<model>/link/<link>/sensor/<link>_contact/contact, and only
+    while the link touches something, so any message is a collision to look at,
+    except the gripper holding its target piece. The base is left out: it always
+    touches the table. Collision names follow the URDF to SDF conversion
+    (<link>_collision, <link>_collision_1, ...) of the pinned so_arm101 description.
+  -->
+  <xacro:macro name="contact_sensor" params="link count">
+    <gazebo reference="$(arg prefix)${link}">
+      <sensor name="${link}_contact" type="contact">
+        <always_on>true</always_on>
+        <update_rate>200</update_rate>
+        <contact>
+          <xacro:contact_collisions link="${link}" index="0" count="${count}" />
+        </contact>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+  <xacro:macro name="contact_collisions" params="link index count">
+    <xacro:if value="${index &lt; count}">
+      <collision>$(arg prefix)${link}_collision${'' if index == 0 else '_' + str(index)}</collision>
+      <xacro:contact_collisions link="${link}" index="${index + 1}" count="${count}" />
+    </xacro:if>
+  </xacro:macro>
+  <xacro:contact_sensor link="shoulder_link" count="3" />
+  <xacro:contact_sensor link="upper_arm_link" count="2" />
+  <xacro:contact_sensor link="lower_arm_link" count="3" />
+  <xacro:contact_sensor link="wrist_link" count="2" />
+  <xacro:contact_sensor link="gripper_link" count="2" />
+  <xacro:contact_sensor link="jaw_link" count="1" />
+
   <gazebo>
     <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
       <parameters>$(arg controllers_file)</parameters>
