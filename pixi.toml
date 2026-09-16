@@ -23,6 +23,8 @@ pydantic = ">=2,<3"
 fastapi = "*"
 uvicorn = "*"
 pyyaml = "*"
+# ament_python symlink installs rely on `setup.py develop`, removed in setuptools 80.
+setuptools = ">=71,<80"
 
 # Build / workspace tooling
 colcon-common-extensions = "*"
@@ -41,10 +43,11 @@ rerun-sdk = "0.37.*"
 # Router: zenohd with the REST plugin (see docs/ for why it replaces rmw_zenohd)
 zenohd = "==1.9.0"
 zenoh-plugin-rest = "==1.9.0"
-zenoh = "==1.9.0"
+zenoh-plugin-storage-manager = "==1.9.0"
 
 # ROS 2
 ros-lyrical-ros-core = "*"
+ros-lyrical-ros2controlcli = "*"
 ros-lyrical-ament-cmake = "*"
 ros-lyrical-ament-cmake-python = "*"
 ros-lyrical-rosidl-default-generators = "*"
@@ -68,6 +71,10 @@ ros-lyrical-ros-gz-sim = "*"
 ros-lyrical-ros-gz-bridge = "*"
 ros-lyrical-gz-ros2-control = "*"
 gz-sim = ">=10,<11"
+
+[pypi-dependencies]
+# Zenoh Python bindings (for the key-value store), same Zenoh version as the router.
+eclipse-zenoh = "==1.9.0"
 
 [feature.dev.dependencies]
 pytest = "*"
@@ -96,7 +103,6 @@ stockfish = { cmd = "make -C external/Stockfish/src -j build ARCH=native COMP=gc
 router = { cmd = "bash -c 'exec zenohd -c config/zenoh/router.json5 --plugin-search-dir \"$CONDA_PREFIX/lib\"'" }
 sim = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup sim.launch.xml \"$@\"' --" }
 viewer = { cmd = "rerun --serve-web rerun+http://127.0.0.1:9876/proxy --web-viewer-port 9090" }
-ui = { cmd = "python -m http.server 8080 --directory src/chessbot_web/web" }
 check = { cmd = "bash -c 'source install/setup.bash && exec python tools/check_stack.py \"$@\"' --" }
 
 [target.osx-arm64.tasks]

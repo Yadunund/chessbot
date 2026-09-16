@@ -19,5 +19,16 @@
     rest: {
       http_port: 8080,
     },
+    // In-memory key-value store for shared configuration such as calibration.
+    // Nothing durable lives here: nodes prime it on startup (the calibration
+    // node from its YAML), and any node or the browser can GET it.
+    storage_manager: {
+      storages: {
+        chessbot_kv: {
+          key_expr: "chessbot/kv/**",
+          volume: { id: "memory" },
+        },
+      },
+    },
   },
 }

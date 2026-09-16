@@ -1,0 +1,18 @@
+# What the Rerun bridge logs, and where it sends it.
+# Generic bridge configuration: topic -> rerun entity path.
+/**:
+  ros__parameters:
+    application_id: chessbot
+    serve_grpc: true
+    grpc_port: 9876
+    memory_limit: 25%
+    save_rrd: true
+    # Entity paths follow the rerun convention of a slash-separated tree.
+    image_topics: ["/overhead_camera/image_raw", "/wrist_camera/image_raw"]
+    image_entities: ["cameras/overhead", "cameras/wrist"]
+    image_rate_hz: 5.0
+    image_max_width: 640
+    joint_states_topic: "/joint_states"
+    joint_states_entity: "robot/joints"
+    tf_entity_prefix: "robot/tf"
+    log_tf: true
