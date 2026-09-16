@@ -4,7 +4,7 @@ repositories:
   rerun_ros_bridge:
     type: git
     url: git@github.com:Yadunund/rerun_ros_bridge.git
-    version: 5e6d5e6eb4606b119a7348275e42d6772d439d81
+    version: 2d425a7e639047db0d199ddbac69d742a241b079
   # SO-101 URDF/xacro descriptions (BSD-3-Clause). Same pin as ros-physical-ai/demos.
   ros2_so_arm:
     type: git
