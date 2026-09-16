@@ -33,11 +33,12 @@ class BoardCalibration:
     frame_id: str = "base_link"
     # Board frame origin (a1 outer corner) in `frame_id`, metres.
     #
-    # Nominal values: a 21 cm board whose robot-side edge is 9 cm from the pan
-    # axis (the best placement from the reachability analysis), with the robot at
-    # the rank-8 edge so its own (black) pieces are the ones nearest it and the
-    # human sits opposite.
-    origin_xyz: list[float] = field(default_factory=lambda: [0.3388, -0.105, 0.0])
+    # Nominal values: a 21 cm board whose robot-side edge is 10 cm from the pan
+    # axis, with the robot at the rank-8 edge so its own (black) pieces are the
+    # ones nearest it and the human sits opposite. 9 cm minimises far-rank tilt in
+    # the reachability analysis, but leaves the nearest squares too close to hover
+    # over; 10 cm keeps far-rank tilt around 18 degrees.
+    origin_xyz: list[float] = field(default_factory=lambda: [0.3488, -0.105, 0.0])
     # Rotation of the board frame about +z in `frame_id`, radians.
     yaw_rad: float = math.pi / 2
     square_size_m: float = 0.02625

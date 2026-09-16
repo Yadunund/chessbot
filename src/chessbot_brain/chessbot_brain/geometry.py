@@ -45,11 +45,13 @@ class BoardGeometry:
         """Captured pieces go in two rows beside the board, one side per colour.
 
         White pieces beside the a-file edge, black beside the h-file edge, two
-        squares out from the board so the arm clears the edge pieces.
+        squares out from the board so the arm clears the edge pieces. Slots fill
+        from the rank-8 end, where the robot sits, so the hardest-to-reach slots
+        at the far end of the second row are used last.
         """
         column, row = slot % 8, slot // 8
         bx = -2.0 * self.square_size_m - row * self.square_size_m if colour == "white" else (
             10.0 * self.square_size_m + row * self.square_size_m
         )
-        by = (column + 0.5) * self.square_size_m
+        by = (7 - column + 0.5) * self.square_size_m
         return self.board_to_robot(bx, by)

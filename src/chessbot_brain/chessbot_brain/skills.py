@@ -12,12 +12,14 @@ from __future__ import annotations
 from typing import Callable
 
 from chessbot_brain.board import MoveEffects, piece_colour
-from chessbot_brain.capabilities import Capabilities
+from chessbot_brain.capabilities import Capabilities, CapabilityError
 from chessbot_brain.geometry import BoardGeometry
 
 # Heights above the playing surface, metres.
 GRASP_HEIGHT = 0.015
-TRANSIT_HEIGHT = 0.08
+# Hover heights tried in order. The highest clears every piece, but close to the
+# robot's base it is out of reach, so the arm hovers lower there.
+TRANSIT_HEIGHTS = (0.08, 0.065, 0.05)
 
 Narrate = Callable[[str], None]
 
@@ -27,28 +29,36 @@ def _above(xyz, height):
     return (x, y, z + height)
 
 
-def move_above(caps: Capabilities, xyz, height=TRANSIT_HEIGHT):
-    """Joint-space move to hover over a point (fast, no straight-line constraint)."""
-    target = caps.solve_ik(_above(xyz, height))
-    caps.execute(caps.joint_move_trajectory(target))
+def move_above(caps: Capabilities, xyz) -> float:
+    """Joint-space move to hover over a point, as high as is reachable. Returns the height used."""
+    last_error: CapabilityError | None = None
+    for height in TRANSIT_HEIGHTS:
+        try:
+            target = caps.solve_ik(_above(xyz, height))
+        except CapabilityError as exc:
+            last_error = exc
+            continue
+        caps.execute(caps.joint_move_trajectory(target))
+        return height
+    raise last_error or CapabilityError("no reachable hover height")
 
 
-def descend_and(caps: Capabilities, xyz, gripper_position: float):
-    """Straight down to grasp height, set the gripper, straight back up."""
+def descend_and(caps: Capabilities, xyz, gripper_position: float, hover_height: float):
+    """Straight down to grasp height, set the gripper, straight back up to the hover height."""
     caps.execute(caps.plan_cartesian([_above(xyz, GRASP_HEIGHT)]))
     caps.gripper(gripper_position)
-    caps.execute(caps.plan_cartesian([_above(xyz, TRANSIT_HEIGHT)]))
+    caps.execute(caps.plan_cartesian([_above(xyz, hover_height)]))
 
 
 def pick(caps: Capabilities, xyz):
     caps.gripper(caps.arm.gripper_open)
-    move_above(caps, xyz)
-    descend_and(caps, xyz, caps.arm.gripper_closed)
+    height = move_above(caps, xyz)
+    descend_and(caps, xyz, caps.arm.gripper_closed, height)
 
 
 def place(caps: Capabilities, xyz):
-    move_above(caps, xyz)
-    descend_and(caps, xyz, caps.arm.gripper_open)
+    height = move_above(caps, xyz)
+    descend_and(caps, xyz, caps.arm.gripper_open, height)
 
 
 def transfer(caps: Capabilities, src_xyz, dst_xyz):
