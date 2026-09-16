@@ -17,6 +17,8 @@ A generic ROS 2 to [Rerun](https://rerun.io) bridge, as a composable node.
 
 Each image topic is rate-limited (`image_rate_hz`) so a fast camera does not flood the stream.
 
+Everything is logged on one `ros_time` timeline taken from the node's clock at receipt. With `use_sim_time` it follows `/clock` and is shown as elapsed simulation time; otherwise it is wall-clock time, shown as dates.
+
 ## Viewing
 
 ```bash

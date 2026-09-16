@@ -171,17 +171,13 @@ private:
     return true;
   }
 
-  void set_time(const builtin_interfaces::msg::Time & stamp) const
+  // The timeline follows this node's clock: simulation time from /clock when use_sim_time
+  // is set, shown as elapsed time, otherwise wall-clock time, shown as a date.
+  void set_time()
   {
-    set_time(static_cast<int64_t>(stamp.sec) * 1000000000LL + stamp.nanosec);
-  }
-
-  // Wall-clock stamps show as dates. Simulation time starts at zero, so a stamp before
-  // 2000 is shown as elapsed time instead of a date in 1970.
-  void set_time(int64_t nanos) const
-  {
-    static constexpr int64_t kYear2000Nanos = 946684800LL * 1000000000LL;
-    if (nanos < kYear2000Nanos) {
+    const auto clock = get_clock();
+    const int64_t nanos = clock->now().nanoseconds();
+    if (clock->ros_time_is_active()) {
       rec_.set_time_duration_nanos("ros_time", nanos);
     } else {
       rec_.set_time_timestamp_nanos_since_epoch("ros_time", nanos);
@@ -206,7 +202,7 @@ private:
       return;
     }
 
-    set_time(msg.header.stamp);
+    set_time();
     const rerun::WidthHeight resolution{packed.width, packed.height};
     const auto datatype = static_cast<rerun::encodings::ChannelDatatype>(info->channel_datatype);
     auto bytes = rerun::Collection<uint8_t>::take_ownership(std::move(packed.bytes));
@@ -224,7 +220,7 @@ private:
     if (!due(entity)) {
       return;
     }
-    set_time(msg.header.stamp);
+    set_time();
     // ROS formats look like "jpeg" or "rgb8; jpeg compressed bgr8".
     const bool png = msg.format.find("png") != std::string::npos;
     // Borrowed, not copied: log() serialises synchronously before returning.
@@ -235,7 +231,7 @@ private:
 
   void on_joint_state(const sensor_msgs::msg::JointState & msg)
   {
-    set_time(msg.header.stamp);
+    set_time();
     for (size_t i = 0; i < msg.name.size() && i < msg.position.size(); ++i) {
       rec_.log(joint_entity_ + "/" + msg.name[i], rerun::Scalars(msg.position[i]));
     }
@@ -272,7 +268,7 @@ private:
         topic, type, qos,
         [this, entity, as_log, renderer](std::shared_ptr<const rclcpp::SerializedMessage> msg) {
           const std::string text = renderer->render(*msg);
-          set_time(now().nanoseconds());
+          set_time();
           if (as_log) {
             rec_.log(entity, rerun::TextLog(text));
           } else {
