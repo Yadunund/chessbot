@@ -16,6 +16,7 @@ pixi run stockfish      # builds the Stockfish engine from pinned upstream sourc
 
 pixi run router         # terminal 1: Zenoh router (ROS middleware + REST for the browser)
 pixi run sim            # terminal 2: Gazebo, the robot and every chessbot component
+                        #   add record:=true to also archive the Rerun stream to ~/chessbot_recordings
 pixi run viewer         # terminal 3 (optional): Rerun web viewer on :9090
 ```
 

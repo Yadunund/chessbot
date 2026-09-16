@@ -6,7 +6,8 @@
     serve_grpc: true
     grpc_port: 9876
     memory_limit: 25%
-    save_rrd: true
+    # Recording to .rrd is off unless the launch argument record:=true is given.
+    save_rrd: false
     # Entity paths follow the rerun convention of a slash-separated tree.
     image_topics: ["/overhead_camera/image_raw", "/wrist_camera/image_raw"]
     image_entities: ["cameras/overhead", "cameras/wrist"]

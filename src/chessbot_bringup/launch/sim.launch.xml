@@ -10,6 +10,7 @@
   <arg name="rerun" default="true" description="Run the Rerun bridge." />
   <arg name="brain" default="true" description="Run the brain (game engine and orchestrator)." />
   <arg name="rerun_grpc_port" default="9876" />
+  <arg name="record" default="false" description="Also archive the Rerun stream to an .rrd file in recording_dir." />
   <arg name="recording_dir" default="$(env HOME)/chessbot_recordings" />
   <arg name="rest_port" default="8000" />
   <arg name="calibration_file" default="$(env HOME)/.chessbot/calibration.yaml" />
@@ -33,6 +34,7 @@
       <composable_node pkg="rerun_ros_bridge" plugin="rerun_ros_bridge::RerunBridge" name="rerun_bridge">
         <param from="$(find-pkg-share chessbot_bringup)/config/rerun_bridge.yaml" />
         <param name="grpc_port" value="$(var rerun_grpc_port)" />
+        <param name="save_rrd" value="$(var record)" />
         <param name="recording_dir" value="$(var recording_dir)" />
         <param name="use_sim_time" value="true" />
         <extra_arg name="use_intra_process_comms" value="true" />

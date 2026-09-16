@@ -7,57 +7,79 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div class="page">
   <header class="bar">
     <div class="brand">chessbot</div>
-    <div id="phase" class="pill">connecting…</div>
+    <div id="phase" class="tag">connecting…</div>
     <div id="caps" class="caps" title="Capabilities"></div>
+    <button id="debug-view" class="ghost" type="button">Debug<span class="wide"> view</span> ↗</button>
   </header>
 
   <main class="layout">
-    <section class="play">
+    <section class="board-col">
       <div id="board" class="board" aria-label="Board"></div>
       <div class="moves" id="moves"></div>
+    </section>
 
-      <button id="clock" class="clock" type="button">
-        <span id="clock-label">Your clock</span>
-        <span id="clock-time">--:--</span>
-        <span class="hint">press when you've moved</span>
-      </button>
-
-      <details class="dev">
-        <summary>Developer</summary>
-        <label>Move to report with the clock press
-          <input id="dev-move" placeholder="e2e4" autocomplete="off" />
-        </label>
-        <div class="row">
-          <select id="robot-side">
-            <option value="black">Robot plays black</option>
-            <option value="white">Robot plays white</option>
-          </select>
-          <button id="new-game" type="button">New game</button>
+    <section class="side-col">
+      <div class="card">
+        <h2>Game</h2>
+        <div class="segmented" role="radiogroup" aria-label="Your colour">
+          <label><input type="radio" name="human-side" value="white" checked /><span>You play white</span></label>
+          <label><input type="radio" name="human-side" value="black" /><span>You play black</span></label>
         </div>
+        <div class="row">
+          <label class="field">Robot strength
+            <select id="strength">
+              <option value="1320">Beginner</option>
+              <option value="1600">Casual</option>
+              <option value="2000">Club</option>
+              <option value="0" selected>Full strength</option>
+            </select>
+          </label>
+          <button id="new-game" class="primary" type="button">New game</button>
+        </div>
+      </div>
+
+      <div class="card turn">
+        <h2>Your move</h2>
+        <label class="field">Move
+          <input id="move" placeholder="e2e4" autocomplete="off" spellcheck="false" />
+          <span class="note">Needed until the robot can see your move with its camera.</span>
+        </label>
+        <button id="clock" class="clock" type="button">
+          <span id="clock-label">Your clock</span>
+          <span id="clock-time">--:--</span>
+          <span class="hint">press when you've moved</span>
+        </button>
+        <p id="error" class="error" role="alert"></p>
+      </div>
+
+      <div class="card">
+        <h2>Robot</h2>
         <div class="row">
           <button id="calibrate" type="button">Calibrate</button>
           <button id="park" type="button">Park arm</button>
           <button id="resume" type="button">Resume</button>
         </div>
+      </div>
+
+      <div class="card feed">
+        <h2>Thoughts</h2>
+        <ol id="thoughts"></ol>
+      </div>
+
+      <details class="card dev">
+        <summary>Developer</summary>
         <div class="row">
           <input id="demo-src" placeholder="e2" size="3" />
           <input id="demo-dst" placeholder="e4" size="3" />
           <button id="demo" type="button">Demo transfer</button>
         </div>
-        <p id="error" class="error"></p>
       </details>
     </section>
-
-    <aside class="feed">
-      <div class="feed-head">
-        <h2>Thoughts</h2>
-        <button id="debug-view" type="button">Debug view ↗</button>
-      </div>
-      <ol id="thoughts"></ol>
-    </aside>
   </main>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>

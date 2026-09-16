@@ -21,6 +21,8 @@ const PHASE_TEXT = {
   reading_board: "Reading the board", thinking: "Thinking", moving: "Moving",
   verifying: "Checking the board", needs_help: "Needs help", game_over: "Game over",
 };
+// Phases in which the robot is working and commands would be rejected.
+const WORKING = new Set(["calibrating", "setup", "reading_board", "thinking", "moving", "verifying"]);
 const KINDS = ["perceive", "decide", "plan", "act", "verify", "recover", "explain"];
 const GLYPH = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟" };
 
@@ -29,48 +31,81 @@ let state = null;
 
 // --- rendering -----------------------------------------------------------------------
 
-function renderBoard(fen) {
-  const placement = (fen || "").split(" ")[0];
-  const rows = placement.split("/");
-  const board = $("board");
-  board.innerHTML = "";
-  for (let r = 0; r < 8; r++) {
+const FILES = "abcdefgh";
+
+// Squares are drawn from the human's side: white at the bottom when the robot
+// plays black, flipped otherwise.
+function renderBoard(fen, flipped, lastMove) {
+  const placement = (fen || "8/8/8/8/8/8/8/8").split(" ")[0].split("/");
+  const grid = {};
+  placement.forEach((row, i) => {
     let file = 0;
-    for (const ch of rows[r] || "8") {
-      if (/\d/.test(ch)) {
-        for (let k = 0; k < Number(ch); k++) board.append(square(r, file++, null));
-      } else {
-        board.append(square(r, file++, ch));
+    for (const ch of row) {
+      if (/\d/.test(ch)) file += Number(ch);
+      else grid[`${FILES[file++]}${8 - i}`] = ch;
+    }
+  });
+  const highlight = lastMove ? [lastMove.slice(0, 2), lastMove.slice(2, 4)] : [];
+  const board = $("board");
+  board.replaceChildren();
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      const rank = flipped ? r + 1 : 8 - r;
+      const file = flipped ? 7 - f : f;
+      const name = `${FILES[file]}${rank}`;
+      const el = document.createElement("div");
+      el.className = `sq ${(file + rank) % 2 === 1 ? "d" : "l"}${highlight.includes(name) ? " last" : ""}`;
+      if (f === 0) el.append(coord("rank", rank));
+      if (r === 7) el.append(coord("file", FILES[file]));
+      const piece = grid[name];
+      if (piece) {
+        const span = document.createElement("span");
+        span.className = `piece ${piece === piece.toUpperCase() ? "w" : "b"}`;
+        span.textContent = GLYPH[piece.toUpperCase()];
+        el.append(span);
       }
+      board.append(el);
     }
   }
 }
 
-function square(row, file, piece) {
-  const el = document.createElement("div");
-  el.className = `sq ${(row + file) % 2 === 0 ? "l" : "d"}`;
-  if (piece) {
-    const span = document.createElement("span");
-    span.className = piece === piece.toUpperCase() ? "w" : "b";
-    span.textContent = GLYPH[piece.toUpperCase()];
-    el.append(span);
-  }
-  return el;
+function coord(kind, text) {
+  const span = document.createElement("span");
+  span.className = `coord ${kind}`;
+  span.textContent = text;
+  return span;
 }
 
 function renderState() {
   if (!state) return;
   const phase = $("phase");
   phase.textContent = PHASE_TEXT[state.phase] || state.phase;
-  phase.className = `pill ${state.phase}`;
-  renderBoard(state.fen);
-  $("moves").textContent = state.moves.length ? state.moves.join("  ") : "No moves yet";
-  $("clock").disabled = state.phase !== "human_turn";
+  phase.className = `tag ${state.phase}`;
   const humanSide = state.robot_side === "white" ? "black" : "white";
+  renderBoard(state.fen, humanSide === "black", state.moves[state.moves.length - 1]);
+  $("moves").textContent = state.moves.length ? formatMoves(state.moves) : "No moves yet";
+
+  // Derived from the phase, which arrives live, rather than the polled busy flag.
+  const busy = WORKING.has(state.phase);
+  const yourTurn = state.phase === "human_turn" && !busy;
+  $("clock").disabled = !yourTurn;
+  $("move").disabled = !yourTurn;
+  $("new-game").disabled = busy;
+  $("calibrate").disabled = busy;
+  $("park").disabled = busy;
+  $("resume").disabled = state.phase !== "needs_help" || busy;
   $("clock-label").textContent = state.phase === "human_turn" ? "Your clock" : "Robot's clock";
   renderClock(humanSide);
   if (state.capabilities) renderCapabilities(state.capabilities);
-  $("error").textContent = state.last_error || "";
+  if (state.last_error) $("error").textContent = state.last_error;
+}
+
+function formatMoves(moves) {
+  const pairs = [];
+  for (let i = 0; i < moves.length; i += 2) {
+    pairs.push(`${i / 2 + 1}. ${moves[i]}${moves[i + 1] ? " " + moves[i + 1] : ""}`);
+  }
+  return pairs.join("   ");
 }
 
 function renderClock(humanSide) {
@@ -148,6 +183,7 @@ function live() {
     state.fen = msg.fen;
     state.moves = msg.moves;
     state.robot_side = msg.robot_side === 0 ? "white" : "black";
+    state.last_error = "";
     state.clock = {
       white_ms: msg.white_ms,
       black_ms: msg.black_ms,
@@ -179,9 +215,12 @@ async function post(path, body = {}) {
 // --- controls ------------------------------------------------------------------------
 
 $("clock").addEventListener("click", () => {
-  const move = $("dev-move").value.trim();
+  const move = $("move").value.trim();
   post("/api/press_clock", move ? { move } : {});
-  $("dev-move").value = "";
+  $("move").value = "";
+});
+$("move").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !$("clock").disabled) $("clock").click();
 });
 document.addEventListener("keydown", (event) => {
   if (event.code === "Space" && event.target === document.body && !$("clock").disabled) {
@@ -189,7 +228,13 @@ document.addEventListener("keydown", (event) => {
     $("clock").click();
   }
 });
-$("new-game").addEventListener("click", () => post("/api/new_game", { robot_side: $("robot-side").value }));
+$("new-game").addEventListener("click", () => {
+  const human = document.querySelector('input[name="human-side"]:checked').value;
+  post("/api/new_game", {
+    robot_side: human === "white" ? "black" : "white",
+    engine_elo: Number($("strength").value),
+  });
+});
 $("calibrate").addEventListener("click", () => post("/api/calibrate"));
 $("park").addEventListener("click", () => post("/api/park"));
 $("resume").addEventListener("click", () => post("/api/resume"));
