@@ -74,6 +74,9 @@ class MotionNode(Node):
         # tools/dev/gripper_geometry.py.
         self.opening_axis = list(self.declare_parameter("opening_axis", [-1.0, 0.0, 0.0]).value)
         self.max_joint_velocity = float(self.declare_parameter("max_joint_velocity", 0.8).value)
+        # Cartesian paths also respect a tool speed, so short joint steps do not add up to a
+        # fast lunge near the pieces.
+        self.max_cartesian_speed = float(self.declare_parameter("max_cartesian_speed", 0.04).value)
         self.accepted_frames = set(self.declare_parameter("accepted_frames", ["", "world", "base_link"]).value)
         self.max_approach_tilt_deg = float(self.declare_parameter("max_approach_tilt_deg", 25.0).value)
 
@@ -162,19 +165,21 @@ class MotionNode(Node):
 
         response.start_state.joint_state.name = list(self.joint_names)
         response.start_state.joint_state.position = [float(v) for v in start]
-        response.solution.joint_trajectory = self._timed_trajectory(configs)
+        response.solution.joint_trajectory = self._timed_trajectory(configs, kin)
         response.fraction = float(fraction)
         response.error_code.val = MoveItErrorCodes.SUCCESS if fraction > 0.0 else MoveItErrorCodes.NO_IK_SOLUTION
         return response
 
-    def _timed_trajectory(self, configs: list[np.ndarray]) -> JointTrajectory:
-        """Time each step by the largest joint move at the configured velocity."""
+    def _timed_trajectory(self, configs: list[np.ndarray], kin: ArmKinematics) -> JointTrajectory:
+        """Time each step by the slower of the largest joint move and the tool's travel."""
         traj = JointTrajectory()
         traj.joint_names = list(self.joint_names)
         t = 0.0
         for i, q in enumerate(configs):
             if i > 0:
-                t += max(0.02, float(np.max(np.abs(q - configs[i - 1]))) / self.max_joint_velocity)
+                joint_time = float(np.max(np.abs(q - configs[i - 1]))) / self.max_joint_velocity
+                travel = float(np.linalg.norm(kin.forward(q)[0] - kin.forward(configs[i - 1])[0]))
+                t += max(0.02, joint_time, travel / self.max_cartesian_speed)
             point = JointTrajectoryPoint()
             point.positions = [float(v) for v in q]
             point.time_from_start = Duration(sec=int(t), nanosec=int((t - int(t)) * 1e9))

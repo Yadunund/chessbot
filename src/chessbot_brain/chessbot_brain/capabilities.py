@@ -25,6 +25,8 @@ from moveit_msgs.srv import GetCartesianPath, GetPositionIK
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformException, TransformListener
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
@@ -66,6 +68,13 @@ class ArmConfig:
     # radius, so the released piece lands centred.
     pick_offset: float = 0.010
     place_offset: float = 0.0075
+    piece_radius: float = 0.0075
+    # Least acceptable gap between the gripper and any other piece while grasping.
+    clearance: float = 0.005
+    tip_frame: str = "gripper_frame_link"
+    base_frame: str = "base_link"
+    # The jaws' opening direction in tip_frame (matches the motion node's opening_axis).
+    opening_axis: tuple[float, float, float] = (-1.0, 0.0, 0.0)
 
 
 class Capabilities:
@@ -75,6 +84,8 @@ class Capabilities:
         self._joint_lock = threading.Lock()
         self._joints: dict[str, float] = {}
         node.create_subscription(JointState, "/joint_states", self._on_joint_states, 10)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, node)
 
         self.perception = node.create_client(GetBoardState, "/perception/get_board_state")
         self.ik = node.create_client(GetPositionIK, "/compute_ik")
@@ -102,6 +113,22 @@ class Capabilities:
             if not all(j in self._joints for j in self.arm.joints):
                 raise CapabilityError("joint states not received yet")
             return [self._joints[j] for j in self.arm.joints]
+
+    def tool_pose(self) -> tuple[tuple[float, float, float], float]:
+        """Current grasp point position and jaw yaw (opening direction) in the base frame."""
+        try:
+            t = self.tf_buffer.lookup_transform(self.arm.base_frame, self.arm.tip_frame, Time()).transform
+        except TransformException as exc:
+            raise CapabilityError(f"no tool pose: {exc}") from exc
+        x, y, z, w = t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w
+        rotation = [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+        ox = sum(rotation[0][i] * self.arm.opening_axis[i] for i in range(3))
+        oy = sum(rotation[1][i] * self.arm.opening_axis[i] for i in range(3))
+        return (t.translation.x, t.translation.y, t.translation.z), math.atan2(oy, ox)
 
     def status(self) -> dict:
         """Which capabilities are reachable right now (for the UI and checks)."""
@@ -191,7 +218,7 @@ class Capabilities:
         if result.result.error_code != FollowJointTrajectory.Result.SUCCESSFUL:
             raise CapabilityError(f"trajectory failed: {result.result.error_string or result.result.error_code}")
 
-    def gripper(self, position: float, timeout_s: float = 10.0):
+    def gripper(self, position: float, timeout_s: float = 30.0):
         if not self.gripper_action.wait_for_server(timeout_sec=2.0):
             raise CapabilityError("gripper controller is not available")
         goal = ParallelGripperCommand.Goal()

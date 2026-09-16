@@ -54,6 +54,42 @@ def nearest(geom, gdata, ids, probe, probe_pose):
     return best
 
 
+def print_footprint(model, data, geom, gdata, tip, grip, args):
+    """Convex hull, in the tool's (opening, side) plane, of the gripper's collision vertices
+    that are low enough to meet a piece when the tool is at grasp height and vertical."""
+    from scipy.spatial import ConvexHull
+
+    q = pin.neutral(model)
+    q[grip.idx_q] = args.footprint
+    pin.framesForwardKinematics(model, data, q)
+    pin.updateGeometryPlacements(model, data, geom, gdata, q)
+    tool = data.oMf[tip]
+    # Tool axes: z along the approach (from gripper_link towards the tip), x the opening.
+    approach = tool.translation - data.oMf[model.getFrameId(args.fixed_jaw)].translation
+    approach /= np.linalg.norm(approach)
+    opening = tool.rotation @ np.array([-1.0, 0.0, 0.0])
+    opening -= (opening @ approach) * approach
+    opening /= np.linalg.norm(opening)
+    side = np.cross(approach, opening)
+    points = []
+    for i, g in enumerate(geom.geometryObjects):
+        if not (g.name.startswith(args.fixed_jaw) or g.name.startswith(args.moving_jaw)):
+            continue
+        vertices = np.asarray(g.geometry.vertices())
+        world = (gdata.oMg[i].rotation @ vertices.T).T + gdata.oMg[i].translation
+        rel = world - tool.translation
+        depth = rel @ approach  # + towards the table
+        # From the table (grasp height below the tip) up to the tallest piece.
+        keep = (depth <= args.grasp_height) & (depth >= args.grasp_height - args.tallest)
+        points.extend(np.stack([rel[keep] @ opening, rel[keep] @ side], axis=1))
+    points = np.asarray(points)
+    hull = points[ConvexHull(points).vertices]
+    print(f"footprint at gripper {args.footprint} rad: {len(points)} vertices, hull (opening, side) mm:")
+    print("[" + ", ".join(f"[{x:.4f}, {y:.4f}]" for x, y in hull) + "]")
+    print(f"extent opening {points[:, 0].min() * 1000:.1f}..{points[:, 0].max() * 1000:.1f} mm, "
+          f"side {points[:, 1].min() * 1000:.1f}..{points[:, 1].max() * 1000:.1f} mm")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--urdf-url", default="http://127.0.0.1:8000/api/robot_description")
@@ -63,6 +99,9 @@ def main():
     parser.add_argument("--moving-jaw", default="jaw_link")
     parser.add_argument("--gripper-joint", default="gripper_joint")
     parser.add_argument("--band", type=float, default=0.010, help="height of the probed band along the tool axis, m")
+    parser.add_argument("--footprint", type=float, metavar="ANGLE", help="print the gripper's footprint at this gripper angle and exit")
+    parser.add_argument("--grasp-height", type=float, default=0.015, help="grasp point height above the table, m")
+    parser.add_argument("--tallest", type=float, default=0.042, help="tallest piece, m")
     args = parser.parse_args()
 
     model, geom = load(args.urdf_url, args.share)
@@ -74,6 +113,10 @@ def main():
     grip = model.joints[model.getJointId(args.gripper_joint)]
     lower, upper = model.lowerPositionLimit[grip.idx_q], model.upperPositionLimit[grip.idx_q]
     print(f"gripper joint limits: {lower:.3f} .. {upper:.3f} rad")
+
+    if args.footprint is not None:
+        print_footprint(model, data, geom, gdata, tip, grip, args)
+        return
 
     # A thin segment along the tool axis through the grasp point.
     probe = coal.Cylinder(1e-4, args.band)

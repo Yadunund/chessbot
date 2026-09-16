@@ -236,12 +236,45 @@ and narrated skill calls.
 
 Gazebo (gz sim) runs headless inside the `robot_io` container, with the ros_gz bridge as
 another component. The robot uses `gz_ros2_control` with the same controllers as real
-hardware, and the overhead and wrist cameras are simulated sensors. The simulation does not
-include a board or pieces yet, so perception reports no board and the brain's belief is the
-only board.
+hardware, and the overhead and wrist cameras are simulated sensors. The world starts without a
+board or pieces, so perception reports no board and the brain's belief is the only board.
 
 `pixi run check` exercises every interface boundary. With `--e2e` it plays a game in simulation,
 including an illegal move and captures.
+
+### Motion testing
+
+`tools/sim/scenario.py` measures what a motion does to the pieces, using Gazebo's own
+transport rather than screenshots:
+
+1. It sets the believed position (dev endpoint), then spawns the board and pieces from it:
+   cylinders with the real set's 15 mm bases and heights up to the 42 mm king.
+2. It runs an action: park, a demo transfer, or a human move followed by the robot's reply.
+3. Contact sensors on the arm's moving links report every touch while the action runs.
+4. It compares every piece with the belief afterwards.
+
+A run fails on any contact other than the gripper on the piece being moved, on a stationary
+piece that moved more than 2 mm or tipped, or on a moved piece more than 4 mm from its square.
+
+Grasping follows from the gripper's measured geometry (`tools/dev/gripper_geometry.py`):
+- **Grasp point:** it lies on the fixed jaw's inner surface. A pick stops the fixed jaw 2.5 mm
+  from the piece, with the jaws open to 20 mm (piece plus 2.5 mm each side). A place centres the
+  held piece on its square and releases it 3 mm above the board.
+- **Jaw yaw:** at piece height the open gripper is a narrow strip, 13–16 mm wide and 53 mm long
+  along the opening axis. For each pick and place the brain scores jaw yaws every 15° by the
+  strip's clearance to the pieces it believes are there, using the outline below each
+  neighbour's height, and tries the clearest first. The IK honours the tool's roll for this.
+  If every yaw would overlap a piece, the skill refuses rather than knock pieces over.
+- **Clearance limit:** in the starting position the best vertical grasp clears neighbours by
+  only 3.0–4.2 mm, which is the limit of this gripper on 26 mm squares.
+- **Moving:** the tool lifts straight up before any sideways move when it is low over the board.
+  Cartesian moves are limited to 4 cm/s, and a trajectory counts as done only once the arm has
+  arrived and stopped.
+- **Park:** the arm swings to the side at transit height, then lies low along the board's near
+  edge (`tools/dev/park_search.py --pan`).
+
+Poses follow these fixed rules today. Because the belief is already turned into piece cylinders,
+publishing them as a planning scene for collision-aware planning is a small step later.
 
 ## Deployment and compute
 

@@ -41,10 +41,10 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
 from chessbot_brain import skills
-from chessbot_brain.board import Board, piece_colour
+from chessbot_brain.board import Board, piece_colour, square_name
 from chessbot_brain.capabilities import ArmConfig, Capabilities, CapabilityError
 from chessbot_brain.engine import EngineError, UciEngine, choose_reply
-from chessbot_brain.geometry import BoardGeometry, graveyard_cell
+from chessbot_brain.geometry import PIECE_HEIGHTS, BoardGeometry, graveyard_cell
 
 PHASE_NAMES = {
     GameState.PHASE_IDLE: "idle",
@@ -89,8 +89,9 @@ class BrainNode(Node):
         self.default_robot_side = self.declare_parameter("robot_side", "black").value
         self.robot_name = self.declare_parameter("robot_name", "SO-101").value
         self.time_control_ms = int(self.declare_parameter("time_control_ms", 600_000).value)
-        # Folded upright over the base, clear of the board and graveyards (tools/dev/park_search.py).
-        self.park_joints = list(self.declare_parameter("park_joints", [0.0, -0.54, -1.02, -0.30, 0.0]).value)
+        # Swung to the side and lying low along the board's near edge, clear of the board and
+        # graveyards and out of the overhead camera's view (tools/dev/park_search.py --pan).
+        self.park_joints = list(self.declare_parameter("park_joints", [-1.57, 1.59, -1.54, 0.22, 0.0]).value)
         arm = ArmConfig(
             joints=list(
                 self.declare_parameter(
@@ -385,7 +386,8 @@ class BrainNode(Node):
         effects = self.board.effects(reply)
         self.think(Thought.PLAN, f"Plan for {reply}: pick, place{', capture first' if effects.captured else ''}.")
         skills.execute_chess_move(
-            self.caps, geometry, effects, self.graveyard, lambda text: self.think(Thought.ACT, text)
+            self.caps, geometry, effects, self.graveyard, lambda text: self.think(Thought.ACT, text),
+            self.believed_pieces(geometry),
         )
         with self._lock:
             self.board.apply(reply)
@@ -393,7 +395,7 @@ class BrainNode(Node):
         self.publish_state()
 
         self.set_phase(GameState.PHASE_VERIFYING)
-        skills.park(self.caps, self.park_joints)
+        skills.park(self.caps, self.park_joints, self.geometry_if_calibrated())
         response = self.caps.board_state(max_frame_age_s=1.0)
         self.think(Thought.VERIFY, f"Verification: {BOARD_RESULT_TEXT.get(response.result, 'unknown result')}.")
         if self._game_over():
@@ -411,20 +413,42 @@ class BrainNode(Node):
         self.set_phase(previous)
 
     def job_park(self):
-        skills.park(self.caps, self.park_joints)
+        skills.park(self.caps, self.park_joints, self.geometry_if_calibrated())
         self.think(Thought.ACT, "Arm parked.")
 
     def job_resume(self):
         self.think(Thought.RECOVER, "Resumed by operator.")
         self.set_phase(GameState.PHASE_HUMAN_TURN)
 
+    def geometry_if_calibrated(self) -> BoardGeometry | None:
+        try:
+            return self.geometry()
+        except CapabilityError:
+            return None
+
+    def believed_pieces(self, geometry: BoardGeometry) -> dict[str, tuple[float, float, float, float]]:
+        """Every piece the brain believes is on the table, keyed by square or graveyard slot,
+        as (x, y, z, height)."""
+        with self._lock:
+            pieces = {
+                square_name(i): (*geometry.square_centre(square_name(i)), PIECE_HEIGHTS[p.lower()])
+                for i, p in enumerate(self.board.squares)
+                if p
+            }
+            for colour, captured in self.graveyard.items():
+                for slot, piece in enumerate(captured):
+                    pieces[f"grave_{colour}_{slot}"] = (*geometry.graveyard_slot(colour, slot), PIECE_HEIGHTS[piece.lower()])
+        return pieces
+
     def job_demo_transfer(self, src: str, dst: str):
         previous = self.phase
         self.set_phase(GameState.PHASE_MOVING)
         geometry = self.geometry()
         self.think(Thought.ACT, f"Demo: transfer {src} → {dst}.")
-        skills.transfer(self.caps, geometry.square_centre(src), geometry.square_centre(dst), geometry.diagonal_yaws())
-        skills.park(self.caps, self.park_joints)
+        others = self.believed_pieces(geometry)
+        others.pop(src, None)
+        skills.transfer(self.caps, geometry, geometry.square_centre(src), geometry.square_centre(dst), list(others.values()))
+        skills.park(self.caps, self.park_joints, self.geometry_if_calibrated())
         self.set_phase(previous)
 
 

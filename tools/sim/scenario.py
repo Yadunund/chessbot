@@ -154,8 +154,15 @@ def analyse(before_names, poses_before, poses_after, belief_before, belief_after
                     failures.append(f"{name}: believed gone but still in the world at {end}")
                 continue
             dist, target = min(candidates)
+            # Error in the board frame (+x towards the h-file, +y towards rank 8).
+            ex, ey = end[0] - target[0], end[1] - target[1]
+            c, sn = math.cos(board["yaw_rad"]), math.sin(board["yaw_rad"])
+            bx, by = c * ex + sn * ey, -sn * ex + c * ey
+            detail = f"{dist * 1000:.1f} mm (board x {bx * 1000:+.1f}, y {by * 1000:+.1f}), tilted {tilt_deg(q):.0f} deg"
             if dist > args.place_tol or tilt_deg(q) > args.tilt_tol:
-                failures.append(f"{name}: placed {dist * 1000:.1f} mm from its believed square, tilted {tilt_deg(q):.0f} deg")
+                failures.append(f"{name}: placed {detail}")
+            else:
+                print(f"  {name}: placed {detail}")
 
     for (link, model), info in sorted(touches.items()):
         allowed = model in moving_models and link in GRIPPER_LINKS
@@ -177,6 +184,9 @@ def main():
     parser.add_argument("--tilt-tol", type=float, default=5.0, help="deg")
     args = parser.parse_args()
 
+    # Start every run from the park pose, so one failure cannot carry into the next.
+    http("POST", "/api/park")
+    wait_idle()
     if args.fen:
         http("POST", "/api/dev/set_position", {"fen": args.fen, "robot_side": args.robot_side})
         wait_idle()

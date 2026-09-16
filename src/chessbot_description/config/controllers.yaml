@@ -27,8 +27,23 @@ arm_controller:
       - wrist_flex_joint
       - wrist_roll_joint
     allow_partial_joints_goal: false
+    # A goal succeeds only once the arm has arrived and stopped, not when its time is up,
+    # so the gripper never acts while the arm is still settling.
+    constraints:
+      stopped_velocity_tolerance: 0.02
+      goal_time: 2.0
+      shoulder_pan_joint: {goal: 0.01}
+      shoulder_lift_joint: {goal: 0.01}
+      elbow_flex_joint: {goal: 0.01}
+      wrist_flex_joint: {goal: 0.01}
+      wrist_roll_joint: {goal: 0.01}
 
 gripper_controller:
   ros__parameters:
     joint: gripper_joint
+    # Closing on a piece never reaches the command, so a stall is success. The jaw keeps
+    # creeping against a piece, so the stall threshold is well above zero velocity.
     allow_stalling: true
+    stall_velocity_threshold: 0.02
+    stall_timeout: 0.5
+    goal_tolerance: 0.02

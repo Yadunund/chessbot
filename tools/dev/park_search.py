@@ -35,6 +35,8 @@ def main():
     parser.add_argument("--square", type=float, default=0.02625)
     parser.add_argument("--keepout-height", type=float, default=0.042 + 0.02)
     parser.add_argument("--samples", type=int, default=20000)
+    parser.add_argument("--pan", type=float, help="fix the base joint (e.g. 1.5708 to swing the arm to one side)")
+    parser.add_argument("--prefer", choices=["compact", "low"], default="compact")
     args = parser.parse_args()
 
     model, geom = load(args.urdf_url, args.share)
@@ -54,8 +56,15 @@ def main():
     lower, upper = model.lowerPositionLimit[idx], model.upperPositionLimit[idx]
     rng = np.random.default_rng(0)
     tip = model.getFrameId("gripper_frame_link")
+    vertices = {i: np.asarray(geom.geometryObjects[i].geometry.vertices())[::20] for i in robot}
+    # The shoulder only turns about the vertical and always sits at table level.
+    moving = [i for i in robot if not geom.geometryObjects[i].name.startswith("shoulder_link")]
     results = []
-    for q_arm in rng.uniform(lower, upper, size=(args.samples, len(ARM))):
+    samples = rng.uniform(lower, upper, size=(args.samples, len(ARM)))
+    if args.pan is not None:
+        samples[:, 0] = args.pan
+        samples[:, 4] = 0.0
+    for q_arm in samples:
         q = pin.neutral(model)
         q[idx] = q_arm
         pin.framesForwardKinematics(model, data, q)
@@ -64,17 +73,21 @@ def main():
             coal.distance(geom.geometryObjects[i].geometry, gdata.oMg[i], box, box_pose, coal.DistanceRequest(), coal.DistanceResult())
             for i in robot
         )
-        # No part below the table.
-        lowest = min(gdata.oMg[i].translation[2] for i in robot)
-        if lowest < 0.01:
+        # Heights of the actual mesh surfaces: nothing may touch the table.
+        heights = np.concatenate([
+            (gdata.oMg[i].rotation @ vertices[i].T)[2] + gdata.oMg[i].translation[2] for i in moving
+        ])
+        lowest, highest = float(heights.min()), float(heights.max())
+        if lowest < 0.02:
             continue
         reach = float(np.linalg.norm(data.oMf[tip].translation[:2]))
-        results.append((clearance, reach, q_arm))
+        results.append((clearance, reach if args.prefer == "compact" else highest, q_arm))
     good = [r for r in results if r[0] > 0.03]
     good.sort(key=lambda r: (r[1], -r[0]))
     print(f"{len(good)} of {len(results)} samples clear the keep-out box by more than 30 mm")
-    for clearance, reach, q_arm in good[:8]:
-        print(f"clearance {clearance * 1000:5.1f} mm  tool reach {reach * 1000:5.0f} mm  joints [{', '.join(f'{v:.2f}' for v in q_arm)}]")
+    label = "tool reach" if args.prefer == "compact" else "highest link"
+    for clearance, score, q_arm in good[:8]:
+        print(f"clearance {clearance * 1000:5.1f} mm  {label} {score * 1000:5.0f} mm  joints [{', '.join(f'{v:.2f}' for v in q_arm)}]")
 
 
 if __name__ == "__main__":
