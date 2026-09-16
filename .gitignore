@@ -20,3 +20,6 @@ generated/
 
 # OS
 .DS_Store
+
+# pixi build scratch
+.pixi-build/

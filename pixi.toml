@@ -9,6 +9,9 @@ version = "0.1.0"
 
 # License policy: every dependency must be Apache-2.0 compatible.
 # See docs/licensing.md before adding anything here.
+#
+# Zenoh is pinned to the version rmw_zenoh links (libzenohc 1.9.0) so that
+# zenohd plus its REST plugin can serve as the ROS router.
 
 [dependencies]
 # robostack-lyrical only publishes py314 builds.
@@ -16,6 +19,10 @@ python = "3.14.*"
 numpy = ">=2.3,<3"
 scipy = "*"
 pinocchio = ">=4,<5"
+pydantic = ">=2,<3"
+fastapi = "*"
+uvicorn = "*"
+pyyaml = "*"
 
 # Build / workspace tooling
 colcon-common-extensions = "*"
@@ -27,10 +34,40 @@ vcstool = "*"
 make = "*"
 curl = "*"
 
-# ROS 2 (only what is needed so far: building and expanding robot descriptions)
+# Visualization and recording: Rerun C++ SDK for the bridge, CLI for the viewer
+librerun-sdk = "0.37.*"
+rerun-sdk = "0.37.*"
+
+# Router: zenohd with the REST plugin (see docs/ for why it replaces rmw_zenohd)
+zenohd = "==1.9.0"
+zenoh-plugin-rest = "==1.9.0"
+zenoh = "==1.9.0"
+
+# ROS 2
+ros-lyrical-ros-core = "*"
 ros-lyrical-ament-cmake = "*"
 ros-lyrical-ament-cmake-python = "*"
+ros-lyrical-rosidl-default-generators = "*"
 ros-lyrical-xacro = "*"
+ros-lyrical-launch-xml = "*"
+ros-lyrical-rclcpp-components = "*"
+ros-lyrical-rclcpp-action = "*"
+ros-lyrical-rmw-zenoh-cpp = "*"
+ros-lyrical-robot-state-publisher = "*"
+ros-lyrical-tf2-ros = "*"
+ros-lyrical-control-msgs = "*"
+ros-lyrical-moveit-msgs = "*"
+ros-lyrical-vision-msgs = "*"
+# ros2_control
+ros-lyrical-controller-manager = "*"
+ros-lyrical-joint-state-broadcaster = "*"
+ros-lyrical-joint-trajectory-controller = "*"
+ros-lyrical-parallel-gripper-controller = "*"
+# Simulation
+ros-lyrical-ros-gz-sim = "*"
+ros-lyrical-ros-gz-bridge = "*"
+ros-lyrical-gz-ros2-control = "*"
+gz-sim = ">=10,<11"
 
 [feature.dev.dependencies]
 pytest = "*"
@@ -43,17 +80,28 @@ dev = ["dev"]
 CMAKE_PREFIX_PATH = "${CONDA_PREFIX}"
 ROS_DISTRO = "lyrical"
 PYTHONNOUSERSITE = "1"
+RMW_IMPLEMENTATION = "rmw_zenoh_cpp"
+# Nodes connect to the chessbot router rather than scouting for one.
+ZENOH_CONFIG_OVERRIDE = 'connect/endpoints=["tcp/127.0.0.1:7447"];scouting/multicast/enabled=false'
 
 [tasks]
 import-deps = { cmd = "mkdir -p external && vcs import external < chessbot.repos" }
-build = { cmd = "colcon build --symlink-install --base-paths external --packages-up-to so_arm101_description", depends-on = ["import-deps"] }
+build = { cmd = "colcon build --symlink-install --base-paths src external", depends-on = ["import-deps"] }
 so101-urdf = { cmd = "bash -c 'source install/setup.bash && mkdir -p generated && xacro install/so_arm101_description/share/so_arm101_description/urdf/so_arm101.urdf.xacro > generated/so101.urdf'", depends-on = ["build"] }
 reach-check = { cmd = "python tools/reach_check.py --urdf generated/so101.urdf", depends-on = ["so101-urdf"] }
 # Stockfish: separate GPL-3.0 executable, built from pinned upstream source for the host CPU.
 stockfish = { cmd = "make -C external/Stockfish/src -j build ARCH=native COMP=gcc && mkdir -p generated/bin && cp external/Stockfish/src/stockfish generated/bin/", depends-on = ["import-deps"] }
+
+# Run
+router = { cmd = "bash -c 'exec zenohd -c config/zenoh/router.json5 --plugin-search-dir \"$CONDA_PREFIX/lib\"'" }
+sim = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup sim.launch.xml \"$@\"' --" }
+viewer = { cmd = "rerun --serve-web rerun+http://127.0.0.1:9876/proxy --web-viewer-port 9090" }
+ui = { cmd = "python -m http.server 8080 --directory src/chessbot_web/web" }
+check = { cmd = "bash -c 'source install/setup.bash && exec python tools/check_stack.py \"$@\"' --" }
 
 [target.osx-arm64.tasks]
 stockfish = { cmd = "make -C external/Stockfish/src -j build ARCH=native COMP=clang && mkdir -p generated/bin && cp external/Stockfish/src/stockfish generated/bin/", depends-on = ["import-deps"] }
 
 [feature.dev.tasks]
 lint = "ruff check . && ruff format --check ."
+test = { cmd = "bash -c 'source install/setup.bash && exec pytest -q src'" }

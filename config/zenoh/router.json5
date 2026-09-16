@@ -1,0 +1,23 @@
+/// Chessbot Zenoh router.
+///
+/// Replaces rmw_zenohd: the same Zenoh version rmw_zenoh links (1.9.0), plus the
+/// REST plugin, so the browser can read ROS topics over HTTP (GET, and SSE for
+/// live updates) without an extra bridge process.
+{
+  mode: "router",
+  listen: {
+    endpoints: ["tcp/[::]:7447"],
+  },
+  scouting: {
+    // The stack is a known set of hosts; multicast discovery is noise.
+    multicast: { enabled: false },
+  },
+  plugins_loading: {
+    enabled: true,
+  },
+  plugins: {
+    rest: {
+      http_port: 8080,
+    },
+  },
+}
