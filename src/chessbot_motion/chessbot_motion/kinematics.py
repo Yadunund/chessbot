@@ -1,6 +1,6 @@
 # Copyright 2026 Yadunund Vijay
 # SPDX-License-Identifier: Apache-2.0
-"""Inverse kinematics and Cartesian interpolation for a serial arm, on Pinocchio.
+"""Inverse kinematics and Cartesian interpolation for a serial arm, on Pinocchio and SciPy.
 
 ROS-free so it can be tested on its own. The IK solves for tool *position* and
 *approach direction*, which is exactly what a 5-DoF arm like the SO-101 can
@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pinocchio as pin
+from scipy.optimize import least_squares
 
 
 @dataclass
@@ -85,6 +86,10 @@ class ArmKinematics:
         pin.framesForwardKinematics(self.model, self.data, q)
         return pin.SE3(self.data.oMf[self.tip])
 
+    def _residual(self, q_chain: np.ndarray, target_position: np.ndarray, target_approach: np.ndarray, weight: float):
+        position, approach = self.forward(q_chain)
+        return np.concatenate([position - target_position, weight * (approach - target_approach)])
+
     def solve(
         self,
         target_position: np.ndarray,
@@ -93,38 +98,42 @@ class ArmKinematics:
         *,
         position_tolerance: float = 1e-3,
         approach_tolerance_rad: float = np.radians(3.0),
-        approach_weight: float = 0.3,
-        max_iterations: int = 300,
-        damping: float = 1e-3,
+        weights: tuple[float, ...] = (0.3, 0.1, 0.03, 0.01),
+        max_evaluations: int = 300,
     ) -> IkResult:
-        """Damped least-squares IK on position (3) and approach direction (2)."""
+        """Bounded least squares on position and approach direction from one seed.
+
+        Joint limits are handled by the optimiser (trust-region reflective)
+        rather than by clipping, which otherwise pins the arm against a limit.
+        The approach term is tried with decreasing weight: a strong weight keeps
+        the tool as vertical as possible, a weak one lets position win where a
+        vertical tool cannot reach, as long as the tilt stays within tolerance.
+        """
+        target_position = np.asarray(target_position, dtype=float)
         target_approach = np.asarray(target_approach, dtype=float)
-        target_approach /= np.linalg.norm(target_approach)
-        q_chain = np.clip(np.asarray(seed, dtype=float), self.lower, self.upper)
-        pos_err = np.inf
-        ang_err = np.inf
-        for _ in range(max_iterations):
-            q = self._full_q(q_chain)
-            pin.computeJointJacobians(self.model, self.data, q)
-            pin.framesForwardKinematics(self.model, self.data, q)
-            tip = self.data.oMf[self.tip]
-            approach = tip.rotation @ self.approach_local
-
-            e_pos = target_position - tip.translation
-            # Rotation that would take the current approach onto the target one.
-            e_rot = np.cross(approach, target_approach)
-            pos_err = float(np.linalg.norm(e_pos))
+        target_approach = target_approach / np.linalg.norm(target_approach)
+        x0 = np.clip(np.asarray(seed, dtype=float), self.lower + 1e-6, self.upper - 1e-6)
+        best: IkResult | None = None
+        for weight in weights:
+            fit = least_squares(
+                self._residual,
+                x0,
+                bounds=(self.lower, self.upper),
+                args=(target_position, target_approach, weight),
+                method="trf",
+                xtol=1e-10,
+                ftol=1e-10,
+                max_nfev=max_evaluations,
+            )
+            position, approach = self.forward(fit.x)
+            pos_err = float(np.linalg.norm(position - target_position))
             ang_err = float(np.arccos(np.clip(approach @ target_approach, -1.0, 1.0)))
-            if pos_err < position_tolerance and ang_err < approach_tolerance_rad:
-                return IkResult(q_chain, True, pos_err, ang_err)
-
-            J = pin.getFrameJacobian(self.model, self.data, self.tip, pin.LOCAL_WORLD_ALIGNED)[:, self.v_idx]
-            J_task = np.vstack([J[:3], approach_weight * J[3:]])
-            e_task = np.concatenate([e_pos, approach_weight * e_rot])
-            JJt = J_task @ J_task.T + damping * np.eye(6)
-            dq = J_task.T @ np.linalg.solve(JJt, e_task)
-            q_chain = np.clip(q_chain + dq, self.lower, self.upper)
-        return IkResult(q_chain, False, pos_err, ang_err)
+            result = IkResult(fit.x, pos_err < position_tolerance and ang_err < approach_tolerance_rad, pos_err, ang_err)
+            if result.success:
+                return result
+            if best is None or pos_err < best.position_error:
+                best = result
+        return best
 
     def solve_with_restarts(
         self,
@@ -132,33 +141,40 @@ class ArmKinematics:
         target_approach: np.ndarray,
         seed: np.ndarray,
         *,
-        restarts: int = 20,
+        samples: int = 500,
+        seeds_to_refine: int = 4,
+        restarts: int = 2,
         rng: np.random.Generator | None = None,
     ) -> IkResult:
-        """Try the seed first, then random seeds within joint limits.
+        """IK that does not depend on a good seed.
 
-        Damped least squares converges to local minima from far-away seeds; a
-        handful of restarts makes a one-off IK query reliable. Among successful
-        solutions, the one closest to the given seed wins, so the arm does not
-        swing to a distant configuration.
+        Tries the given seed, then the sampled configurations whose tool lands
+        closest to the target, then a few random ones. The requested approach is
+        preferred; the tool only tilts (up to `max_approach_tilt_rad`) when it
+        has to. Among successes, the one closest to the given seed wins so the
+        arm does not swing needlessly.
         """
+        rng = rng or np.random.default_rng(0)
         seed = np.asarray(seed, dtype=float)
-        # Prefer the requested approach; only tilt when it cannot be met.
+        target_position = np.asarray(target_position, dtype=float)
+        target_approach = np.asarray(target_approach, dtype=float) / np.linalg.norm(target_approach)
+
+        candidates = rng.uniform(self.lower, self.upper, size=(samples, len(self.joint_names)))
+        distances = np.array([np.linalg.norm(self.forward(q)[0] - target_position) for q in candidates])
+        seeds = [seed, *candidates[np.argsort(distances)[:seeds_to_refine]]]
+        seeds += list(rng.uniform(self.lower, self.upper, size=(restarts, len(self.joint_names))))
+
+        last: IkResult | None = None
         for tolerance in (np.radians(3.0), self.max_approach_tilt_rad):
-            rng = rng or np.random.default_rng(0)
-            best = self.solve(target_position, target_approach, seed, approach_tolerance_rad=tolerance)
-            if best.success:
-                return best
-            for _ in range(restarts):
-                candidate_seed = rng.uniform(self.lower, self.upper)
+            best: IkResult | None = None
+            for candidate_seed in seeds:
                 result = self.solve(target_position, target_approach, candidate_seed, approach_tolerance_rad=tolerance)
-                if result.success and (
-                    not best.success or np.linalg.norm(result.q - seed) < np.linalg.norm(best.q - seed)
-                ):
+                last = result
+                if result.success and (best is None or np.linalg.norm(result.q - seed) < np.linalg.norm(best.q - seed)):
                     best = result
-            if best.success:
+            if best is not None:
                 return best
-        return best
+        return last
 
     def cartesian_path(
         self,
@@ -189,9 +205,7 @@ class ArmKinematics:
                 p = (1 - s) * p0 + s * p1
                 a = (1 - s) * a0 + s * a1
                 a /= np.linalg.norm(a)
-                result = self.solve(
-                    p, a, configs[-1], max_iterations=100, approach_tolerance_rad=self.max_approach_tilt_rad
-                )
+                result = self.solve(p, a, configs[-1], approach_tolerance_rad=self.max_approach_tilt_rad)
                 if not result.success:
                     return configs, (done + (i - 1) / steps * length) / total if total > 0 else 0.0
                 configs.append(result.q)

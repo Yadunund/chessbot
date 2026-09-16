@@ -56,3 +56,11 @@ def test_cartesian_descent(kin):
     configs, fraction = kin.cartesian_path(start.q, [(start_target - [0, 0, 0.06], down)])
     assert fraction == 1.0
     assert len(configs) > 5
+
+
+def test_far_edge_of_workspace_solves_cold(kin):
+    # 30 cm forward of the pan axis at grasp height is reachable with a near-vertical
+    # tool; a zero seed alone does not converge there.
+    target = np.array([0.0388 + 0.30, 0.0, 0.015])
+    result = kin.solve_with_restarts(target, np.array([0.0, 0.0, -1.0]), np.zeros(len(JOINTS)))
+    assert result.success
