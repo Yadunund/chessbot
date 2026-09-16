@@ -9,10 +9,13 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(rosidl_typesupport_introspection_cpp REQUIRED)
+find_package(rmw REQUIRED)
 find_package(rerun_sdk REQUIRED)
 
 add_library(rerun_bridge_component SHARED
   src/image_conversion.cpp
+  src/message_to_yaml.cpp
   src/rerun_bridge.cpp
 )
 target_include_directories(rerun_bridge_component PUBLIC
@@ -23,6 +26,8 @@ target_link_libraries(rerun_bridge_component PUBLIC
   rclcpp::rclcpp
   rclcpp_components::component
   ${sensor_msgs_TARGETS}
+  rosidl_typesupport_introspection_cpp::rosidl_typesupport_introspection_cpp
+  rmw::rmw
   rerun_sdk
 )
 rclcpp_components_register_node(rerun_bridge_component

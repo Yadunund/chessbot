@@ -13,5 +13,8 @@
     image_max_width: 640      # downscale larger frames for the live stream; 0 disables
     compressed_image_topics: []
     compressed_image_entities: []
+    text_topics: ["/diagnostics"]
+    text_entities: ["diagnostics"]
+    text_modes: ["log"]         # log (append) | document (latest)
     joint_states_topic: /joint_states
     joint_states_entity: robot/joints

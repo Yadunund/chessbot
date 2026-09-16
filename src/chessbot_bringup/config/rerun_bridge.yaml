@@ -12,6 +12,9 @@
     image_entities: ["cameras/overhead", "cameras/wrist"]
     image_rate_hz: 5.0
     image_max_width: 640
+    text_topics: ["/chessbot/thoughts", "/chessbot/game_state"]
+    text_entities: ["reasoning/thoughts", "game/state"]
+    text_modes: ["log", "document"]
     joint_states_topic: "/joint_states"
     joint_states_entity: "robot/joints"
     tf_entity_prefix: "robot/tf"

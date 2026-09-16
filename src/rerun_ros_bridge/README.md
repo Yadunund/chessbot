@@ -13,6 +13,7 @@ A generic ROS 2 to [Rerun](https://rerun.io) bridge, as a composable node.
 | `sensor_msgs/Image` | `Image` / `DepthImage` | rgb8, bgr8, rgba8, bgra8, mono8, mono16, 16UC1 (mm), 32FC1 (m); row padding and big-endian handled; optional downscale |
 | `sensor_msgs/CompressedImage` | `EncodedImage` | JPEG/PNG passed through without decoding |
 | `sensor_msgs/JointState` | `Scalars` per joint | |
+| **any type** (`text_topics`) | `TextLog` or `TextDocument` | type discovered at runtime and rendered as YAML via introspection; latched topics deliver their current value |
 
 Each image topic is rate-limited (`image_rate_hz`) so a fast camera does not flood the stream.
 

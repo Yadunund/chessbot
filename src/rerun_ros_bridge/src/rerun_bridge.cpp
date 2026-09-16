@@ -9,7 +9,8 @@
 // same data to an .rrd file.
 //
 // Nothing here is specific to any application: what to log is configured by
-// parameters (topic -> entity path).
+// parameters (topic -> entity path). Topics of any type can be logged as text:
+// their type is discovered at runtime and rendered through introspection.
 
 #include <chrono>
 #include <filesystem>
@@ -20,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include <rclcpp/generic_subscription.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <rerun.hpp>
@@ -28,6 +30,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 
 #include "rerun_ros_bridge/image_conversion.hpp"
+#include "rerun_ros_bridge/message_to_yaml.hpp"
 
 namespace rerun_ros_bridge
 {
@@ -66,6 +69,15 @@ public:
     auto compressed_entities = declare_parameter<std::vector<std::string>>(
       "compressed_image_entities", std::vector<std::string>{});
     subscribe_compressed_images(compressed_topics, compressed_entities);
+
+    text_topics_ = declare_parameter<std::vector<std::string>>("text_topics", std::vector<std::string>{});
+    text_entities_ = declare_parameter<std::vector<std::string>>("text_entities", std::vector<std::string>{});
+    // "log" appends each message to a TextLog; "document" shows the latest as a TextDocument.
+    text_modes_ = declare_parameter<std::vector<std::string>>("text_modes", std::vector<std::string>{});
+    if (!text_topics_.empty()) {
+      // Types are only known once someone publishes, so keep looking until every topic is found.
+      discover_timer_ = create_wall_timer(std::chrono::seconds(1), [this]() {discover_text_topics();});
+    }
 
     const auto joint_topic = declare_parameter<std::string>("joint_states_topic", "");
     joint_entity_ = declare_parameter<std::string>("joint_states_entity", "joints");
@@ -218,7 +230,57 @@ private:
     }
   }
 
+  void discover_text_topics()
+  {
+    const auto graph = get_topic_names_and_types();
+    bool all_found = true;
+    for (size_t i = 0; i < text_topics_.size(); ++i) {
+      const auto & topic = text_topics_[i];
+      if (text_subs_.count(topic)) {
+        continue;
+      }
+      auto it = graph.find(topic);
+      if (it == graph.end() || it->second.empty()) {
+        all_found = false;
+        continue;
+      }
+      const std::string type = it->second.front();
+      const std::string entity = i < text_entities_.size() ? text_entities_[i] : topic;
+      const bool as_log = !(i < text_modes_.size() && text_modes_[i] == "document");
+      std::shared_ptr<MessageToYaml> renderer;
+      try {
+        renderer = std::make_shared<MessageToYaml>(type);
+      } catch (const std::exception & e) {
+        RCLCPP_WARN(get_logger(), "Cannot log %s (%s): %s", topic.c_str(), type.c_str(), e.what());
+        text_subs_[topic] = nullptr;  // do not retry a type we cannot load
+        continue;
+      }
+      // Reliable and transient-local, so a latched topic's current value arrives on subscribe.
+      const auto qos = rclcpp::QoS(10).reliable().transient_local();
+      text_subs_[topic] = create_generic_subscription(
+        topic, type, qos,
+        [this, entity, as_log, renderer](std::shared_ptr<const rclcpp::SerializedMessage> msg) {
+          const std::string text = renderer->render(*msg);
+          rec_.set_time_timestamp_nanos_since_epoch("ros_time", now().nanoseconds());
+          if (as_log) {
+            rec_.log(entity, rerun::TextLog(text));
+          } else {
+            rec_.log(entity, rerun::TextDocument(text).with_media_type(rerun::MediaType::markdown()));
+          }
+        });
+      RCLCPP_INFO(get_logger(), "Logging %s (%s) as text at %s", topic.c_str(), type.c_str(), entity.c_str());
+    }
+    if (all_found) {
+      discover_timer_->cancel();
+    }
+  }
+
   rerun::RecordingStream rec_;
+  std::vector<std::string> text_topics_;
+  std::vector<std::string> text_entities_;
+  std::vector<std::string> text_modes_;
+  rclcpp::TimerBase::SharedPtr discover_timer_;
+  std::unordered_map<std::string, rclcpp::GenericSubscription::SharedPtr> text_subs_;
   std::string rrd_path_;
   std::chrono::duration<double> image_period_{0.2};
   uint32_t image_max_width_{640};
