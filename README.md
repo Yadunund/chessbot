@@ -1,66 +1,93 @@
-# chessbot
+<h1 align="center">chessbot</h1>
 
-Play chess against a real robot arm on a physical board.
+<p align="center">
+  <b>Play chess against a real robot arm, on a real board.</b><br/>
+  Move your piece, press the clock, and watch the robot think and reply.
+</p>
 
-A robot arm (starting with the [SO-101](https://github.com/TheRobotStudio/SO-ARM100)) watches the board with an overhead and a wrist camera, plans its reply, and moves the pieces itself. You play through a minimal web page on the same network: press the big clock button when you've moved.
+<p align="center">
+  <img src="https://github.com/Yadunund/chessbot/raw/media/ui-3d-moving.png" alt="The chessbot UI: a 3D view of the board with the SO-101 arm reaching for a piece while playing black" width="900"/>
+</p>
 
-> **Status:** the full stack runs in simulation. Stockfish plays the robot's moves and checks yours for legality. The arm picks and places in Gazebo, and the UI and Rerun debug view are live. Not yet implemented: detecting your move from the camera (the clock press takes the move explicitly for now), a board and pieces in simulation, and the calibration measurement itself.
+## What it does
 
-## Quick start (linux-64)
+- **A robot opponent.** An [SO-101](https://github.com/TheRobotStudio/SO-ARM100) arm picks and places
+  its own pieces, captures included, on a standard 21 cm board. Stockfish chooses its moves at the
+  strength you pick and checks yours are legal.
+- **See what the robot believes.** The UI draws the board, the pieces and the arm in 3D, with the arm
+  moving live as the robot moves. Switch to top down or a flat 2D board at any time.
+- **A clock you actually press.** When you've moved, hit the big clock button. Player strips show who
+  plays which colour, whose turn it is, and what the robot is doing.
+- **Hear it think.** A running thought feed narrates each step: reading the board, choosing a move,
+  planning the grasp, moving, checking.
+- **Look under the hood.** One click opens a Rerun debug view with camera feeds, joint trajectories and
+  game state on a shared timeline. Recording to disk is one flag away.
+- **Runs in simulation.** The whole stack plays full games in Gazebo with the same interfaces as the
+  real robot.
+- **Works on your phone.** Open the UI from any device on your network.
 
-Requires [pixi](https://pixi.sh).
+<table>
+  <tr>
+    <td width="42%"><img src="https://github.com/Yadunund/chessbot/raw/media/ui-top-down.png" alt="Top-down view with the arm drawn translucent over the board"/></td>
+    <td width="20%"><img src="https://github.com/Yadunund/chessbot/raw/media/ui-phone.png" alt="The UI on a phone"/></td>
+    <td width="38%"><img src="https://github.com/Yadunund/chessbot/raw/media/rerun.png" alt="Rerun debug view with cameras, game state and joint plots"/></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Top down: the arm stays visible, translucent</sub></td>
+    <td align="center"><sub>On a phone</sub></td>
+    <td align="center"><sub>Rerun debug view</sub></td>
+  </tr>
+</table>
+
+## Quick start
+
+Runs on Linux (x86-64) with [pixi](https://pixi.sh). Simulation needs no hardware.
 
 ```bash
-pixi run build          # imports external sources and builds the workspace
-pixi run stockfish      # builds the Stockfish engine from pinned upstream source
+pixi run build          # fetch pinned sources and build the workspace
+pixi run stockfish      # build the Stockfish engine
 
-pixi run router         # terminal 1: Zenoh router (ROS middleware + REST for the browser)
-pixi run sim            # terminal 2: Gazebo, the robot and every chessbot component
-                        #   add record:=true to also archive the Rerun stream to ~/chessbot_recordings
-pixi run viewer         # terminal 3 (optional): Rerun web viewer on :9090
+pixi run router         # terminal 1: message router
+pixi run sim            # terminal 2: simulated robot and every chessbot component
+pixi run viewer         # terminal 3 (optional): Rerun debug view on :9090
 ```
 
-Then open `http://<host>:8000`: the UI, served by the brain.
+Open **`http://<host>:8000`**, choose your colour and strength, and press **New game**.
 
-To check that everything is wired up:
-
-```bash
-pixi run check                     # every interface boundary
-pixi run check --e2e --moves 4     # also plays a short game in simulation
-```
-
-To stop the stack: `tools/dev/stop.sh` (add `--all` to stop the router too).
-
-## Architecture
-
-The **brain** is the game engine and orchestrator. It composes capabilities as a client, publishes game state and a readable thought feed, and serves a REST API and the UI. Each **capability** sits behind a contract, so implementations can be swapped:
-
-| Package | Role |
+| To… | Run |
 |---|---|
-| `chessbot_brain` | game engine, orchestrator, skills ([docs](src/chessbot_brain/skills/README.md)), REST API |
-| `chessbot_perception` | camera frames → board facts, on request (C++ component) |
-| `chessbot_motion` | IK and Cartesian paths behind MoveIt's standard services |
-| `chessbot_calibration` | calibration YAML, Zenoh key-value store, `Calibrate` action |
-| `rerun_ros_bridge` | generic ROS 2 → Rerun bridge (C++ component, no chessbot dependencies) |
-| `chessbot_interfaces` | the few custom interfaces: game state, thoughts, board state, calibration |
-| `chessbot_description` | SO-101 with cameras, ros2_control, simulation world |
-| `chessbot_bringup` | launch files and configuration |
-| `chessbot_web` | the UI: plain HTML, CSS and JavaScript |
+| Record the session to `~/chessbot_recordings` | `pixi run sim record:=true` |
+| Check every connection in the stack | `pixi run check` |
+| Also play a short game automatically | `pixi run check --e2e --moves 4` |
+| Stop everything | `tools/dev/stop.sh` (add `--all` to stop the router) |
 
-Camera frames, perception and the Rerun bridge share one C++ container (`robot_io`) with intra-process comms and the callback-group events executor, so images are never serialised between them.
+## Playing
 
-See [docs/interfaces.md](docs/interfaces.md) for every boundary and its type.
+1. **New game.** Pick a colour and a strength. The robot sets its clock and, if it plays white, moves first.
+2. **Your move.** Move a piece on the board, type the move (for example `e2e4`), and press the clock.
+   Typing the move is temporary, until the robot reads the board with its camera.
+3. **The robot's move.** It checks your move is legal, chooses a reply, and moves the piece, putting
+   captured pieces beside the board. Follow along in the 3D view and the thought feed.
+4. **If something goes wrong**, it stops and asks for help. Fix the board and press **Resume**.
 
-## Layout
+## Status
 
-| Path | Contents |
-|---|---|
-| `src/` | ROS 2 packages |
-| `config/zenoh/` | router configuration |
-| `tools/` | reachability analysis, stack checks, dev scripts |
-| `docs/` | interfaces, licensing |
-| `chessbot.repos` | pinned external sources (SO-101 description, Stockfish) |
+Complete games work in simulation. Still to come:
+
+- reading your move from the camera
+- a board and pieces in simulation
+- measuring the board's position automatically
+- promotion piece swaps
+- vision-language reasoning
+- running on the real SO-101
+
+## Learn more
+
+- [Design](docs/design.md): architecture, components and how data flows
+- [Interfaces](docs/interfaces.md): every boundary and its type
+- [Skills](src/chessbot_brain/skills/README.md): the robot's actions and their contracts
+- [Licensing](docs/licensing.md): dependency policy
 
 ## License
 
-Apache-2.0. All dependencies must be Apache-2.0 compatible; see [docs/licensing.md](docs/licensing.md). Stockfish (GPL-3.0) is built separately and used only as an external process over UCI.
+Apache-2.0. Stockfish (GPL-3.0) is built separately and used only as an external process.

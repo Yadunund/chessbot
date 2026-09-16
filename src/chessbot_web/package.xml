@@ -3,7 +3,7 @@
 <package format="3">
   <name>chessbot_web</name>
   <version>0.1.0</version>
-  <description>Chessbot web UI: static HTML, CSS and JavaScript, no third-party code.</description>
+  <description>Chessbot web UI: static HTML, CSS and JavaScript. Vendors three.js (MIT) for the 3D view.</description>
   <maintainer email="yadunund@gmail.com">Yadunund Vijay</maintainer>
   <license>Apache-2.0</license>
 

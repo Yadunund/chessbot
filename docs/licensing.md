@@ -4,7 +4,7 @@ chessbot is Apache-2.0. **Every dependency we import, link, vendor, or ship must
 
 Not allowed: GPL, LGPL, AGPL, and non-commercial licenses (e.g. CC-BY-NC), whether for code or for model weights.
 
-The web frontend is written in-house with no third-party JavaScript.
+The web frontend is written in-house. Its only third-party JavaScript is three.js (MIT), vendored unmodified under `src/chessbot_web/web/vendor/three/` for the 3D view.
 
 ## Before adding a dependency
 
