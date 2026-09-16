@@ -1,16 +1,35 @@
-/// Chessbot Zenoh router.
-///
-/// Replaces rmw_zenohd: the same Zenoh version rmw_zenoh links (1.9.0), plus the
-/// REST plugin, so the browser can read ROS topics over HTTP (GET, and SSE for
-/// live updates) without an extra bridge process.
+// Zenoh router for chessbot: rmw_zenoh's router settings (where they differ from Zenoh's
+// defaults) plus the REST plugin and an in-memory key-value store.
+// Upstream: rmw_zenoh_cpp/config/DEFAULT_RMW_ZENOH_ROUTER_CONFIG.json5
 {
   mode: "router",
   listen: {
     endpoints: ["tcp/[::]:7447"],
   },
   scouting: {
-    // The stack is a known set of hosts; multicast discovery is noise.
     multicast: { enabled: false },
+  },
+  queries_default_timeout: 600000,
+  transport: {
+    unicast: {
+      open_timeout: 60000,
+      accept_timeout: 60000,
+      accept_pending: 10000,
+      max_sessions: 10000,
+    },
+    link: {
+      tx: {
+        lease: 60000,
+        keep_alive: 2,
+      },
+    },
+    shared_memory: {
+      enabled: false,
+    },
+  },
+  adminspace: {
+    enabled: true,
+    permissions: { read: true, write: false },
   },
   plugins_loading: {
     enabled: true,
@@ -19,9 +38,6 @@
     rest: {
       http_port: 8080,
     },
-    // In-memory key-value store for shared configuration such as calibration.
-    // Nothing durable lives here: nodes prime it on startup (the calibration
-    // node from its YAML), and any node or the browser can GET it.
     storage_manager: {
       storages: {
         chessbot_kv: {
