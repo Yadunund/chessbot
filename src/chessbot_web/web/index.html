@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chessbot</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">chessbot</div>
+    <div id="phase" class="pill">connecting…</div>
+    <div id="caps" class="caps" title="Capabilities"></div>
+  </header>
+
+  <main class="layout">
+    <section class="play">
+      <div id="board" class="board" aria-label="Board"></div>
+      <div class="moves" id="moves"></div>
+
+      <button id="clock" class="clock" type="button">
+        <span id="clock-label">Your clock</span>
+        <span id="clock-time">--:--</span>
+        <span class="hint">press when you've moved</span>
+      </button>
+
+      <details class="dev">
+        <summary>Developer</summary>
+        <label>Move to report with the clock press
+          <input id="dev-move" placeholder="e2e4" autocomplete="off" />
+        </label>
+        <div class="row">
+          <select id="robot-side">
+            <option value="black">Robot plays black</option>
+            <option value="white">Robot plays white</option>
+          </select>
+          <button id="new-game" type="button">New game</button>
+        </div>
+        <div class="row">
+          <button id="calibrate" type="button">Calibrate</button>
+          <button id="park" type="button">Park arm</button>
+          <button id="resume" type="button">Resume</button>
+        </div>
+        <div class="row">
+          <input id="demo-src" placeholder="e2" size="3" />
+          <input id="demo-dst" placeholder="e4" size="3" />
+          <button id="demo" type="button">Demo transfer</button>
+        </div>
+        <p id="error" class="error"></p>
+      </details>
+    </section>
+
+    <aside class="feed">
+      <div class="feed-head">
+        <h2>Thoughts</h2>
+        <button id="debug-view" type="button">Debug view ↗</button>
+      </div>
+      <ol id="thoughts"></ol>
+    </aside>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

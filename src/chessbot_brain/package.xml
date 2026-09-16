@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>chessbot_brain</name>
+  <version>0.1.0</version>
+  <description>
+    The brain: game engine and orchestrator. Composes perception, motion,
+    control and calibration as a client, publishes game state and the thought
+    feed, and serves the REST API and UI.
+  </description>
+  <maintainer email="yadunund@gmail.com">Yadunund Vijay</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>chessbot_interfaces</exec_depend>
+  <exec_depend>chessbot_web</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
