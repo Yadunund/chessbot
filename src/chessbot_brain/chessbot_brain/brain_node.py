@@ -8,9 +8,11 @@ It composes capabilities (perception, motion planning, control, calibration)
 as a client, and serves a REST API the UI calls. It also serves the UI's static
 files, so the browser talks to one origin.
 
-Not implemented yet, and said so in the thought feed when it matters:
-detecting the human's move from perception, legality checking, and Stockfish.
-Until then a move can be passed explicitly to ``press_clock`` (dev).
+Rules questions (legal moves, check) and move choice go to Stockfish over UCI
+when the binary is available; otherwise a placeholder that checks no rules.
+Not implemented yet, and said so in the thought feed: detecting the human's
+move from perception. Until then the move is passed explicitly to
+``press_clock``.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from chessbot_brain import skills
 from chessbot_brain.board import Board, piece_colour
 from chessbot_brain.capabilities import ArmConfig, Capabilities, CapabilityError
-from chessbot_brain.engine import choose_reply
+from chessbot_brain.engine import EngineError, UciEngine, choose_reply
 from chessbot_brain.geometry import BoardGeometry
 
 PHASE_NAMES = {
@@ -93,6 +95,9 @@ class BrainNode(Node):
             joint_speed=float(self.declare_parameter("joint_speed", 0.8).value),
         )
         zenoh_endpoint = self.declare_parameter("zenoh_endpoint", "tcp/127.0.0.1:7447").value
+        default_stockfish = os.path.join(os.environ.get("PIXI_PROJECT_ROOT", ""), "generated", "bin", "stockfish")
+        stockfish_path = self.declare_parameter("stockfish_path", default_stockfish).value
+        self.engine_movetime_ms = int(self.declare_parameter("engine_movetime_ms", 800).value)
 
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
         self.state_pub = self.create_publisher(GameState, "/chessbot/game_state", latched)
@@ -107,12 +112,22 @@ class BrainNode(Node):
         self.last_error = ""
         self.current_job = ""
 
+        self.engine: UciEngine | None = None
+        if stockfish_path and os.path.isfile(stockfish_path):
+            try:
+                self.engine = UciEngine(stockfish_path)
+            except (OSError, EngineError) as exc:
+                self.get_logger().error(f"Could not start Stockfish at {stockfish_path}: {exc}")
+        else:
+            self.get_logger().warning(f"No Stockfish at '{stockfish_path}' (run `pixi run stockfish`)")
+
         self.mode = GameState.MODE_PROTOTYPE
         self.engine_elo = 0
         self._reset_game(self.default_robot_side)
         self.phase = GameState.PHASE_IDLE
         self.publish_state()
-        self.think(Thought.EXPLAIN, "Brain started. Start a new game when ready.")
+        engine_text = "Stockfish" if self.engine else "a placeholder engine that checks no rules"
+        self.think(Thought.EXPLAIN, f"Brain started, using {engine_text}. Start a new game when ready.")
 
     # --- game state ----------------------------------------------------------------
 
@@ -264,10 +279,9 @@ class BrainNode(Node):
             self.set_phase(GameState.PHASE_HUMAN_TURN)
             return
 
-        human_side = self.side_to_move()
-        piece = self.board.piece_at(move[:2]) if len(move) >= 4 else None
-        if piece is None or piece_colour(piece) != human_side:
-            self.think(Thought.RECOVER, f"{move} doesn't move one of your pieces. Your clock keeps running.")
+        move = self._legal_form(move)
+        if move is None:
+            self.think(Thought.RECOVER, "That isn't a legal move here. Your clock keeps running.")
             self.set_phase(GameState.PHASE_HUMAN_TURN)
             return
 
@@ -275,17 +289,55 @@ class BrainNode(Node):
             self.board.apply(move)
             self.moves.append(move)
         self.think(Thought.DECIDE, f"Your move: {move}.")
+        if self._game_over():
+            return
         self._robot_turn()
+
+    def _legal_form(self, move: str) -> str | None:
+        """The move as the engine spells it if legal (adding a queen promotion when omitted), else None."""
+        move = move.strip().lower()
+        if self.engine is None:
+            piece = self.board.piece_at(move[:2]) if len(move) >= 4 else None
+            ok = piece is not None and piece_colour(piece) == self.side_to_move()
+            return move if ok else None
+        legal = self.engine.legal_moves(self.board.fen())
+        if move in legal:
+            return move
+        if move + "q" in legal:
+            return move + "q"
+        return None
+
+    def _game_over(self) -> bool:
+        """Detect checkmate or stalemate for the side to move; update result and phase."""
+        if self.engine is None or self.engine.legal_moves(self.board.fen()):
+            return False
+        loser = self.side_to_move()
+        with self._lock:
+            if self.engine.in_check(self.board.fen()):
+                self.result = GameState.RESULT_BLACK_WON if loser == "white" else GameState.RESULT_WHITE_WON
+                text = f"Checkmate. {'Black' if loser == 'white' else 'White'} wins."
+            else:
+                self.result = GameState.RESULT_DRAW
+                text = "Stalemate. It's a draw."
+        self._switch_clock(None)
+        self.think(Thought.DECIDE, text)
+        self.set_phase(GameState.PHASE_GAME_OVER)
+        return True
 
     def _robot_turn(self):
         self._switch_clock(self.robot_side)
         self.set_phase(GameState.PHASE_THINKING)
-        reply = choose_reply(self.board, self.robot_side)
-        if reply is None:
-            self.think(Thought.DECIDE, "I have no move to play.")
-            self.set_phase(GameState.PHASE_GAME_OVER)
-            return
-        self.think(Thought.DECIDE, f"I'll play {reply} (placeholder engine; Stockfish not wired in yet).")
+        if self.engine is not None:
+            reply = self.engine.best_move(self.board.fen(), self.engine_movetime_ms, self.engine_elo)
+            strength = f"Elo {self.engine_elo}" if self.engine_elo else "full strength"
+            self.think(Thought.DECIDE, f"I'll play {reply} (Stockfish, {strength}, {self.engine_movetime_ms} ms).")
+        else:
+            reply = choose_reply(self.board, self.robot_side)
+            if reply is None:
+                self.think(Thought.DECIDE, "I have no move to play.")
+                self.set_phase(GameState.PHASE_GAME_OVER)
+                return
+            self.think(Thought.DECIDE, f"I'll play {reply} (placeholder engine, no rules checked).")
 
         self.set_phase(GameState.PHASE_MOVING)
         geometry = self.geometry()
@@ -303,6 +355,8 @@ class BrainNode(Node):
         skills.park(self.caps, self.park_joints)
         response = self.caps.board_state(max_frame_age_s=1.0)
         self.think(Thought.VERIFY, f"Verification: {BOARD_RESULT_TEXT.get(response.result, 'unknown result')}.")
+        if self._game_over():
+            return
 
         self._switch_clock("white" if self.robot_side == "black" else "black")
         self.set_phase(GameState.PHASE_HUMAN_TURN)
@@ -412,6 +466,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if node.engine is not None:
+            node.engine.close()
         node.caps.close()
         executor.shutdown()
         node.destroy_node()
