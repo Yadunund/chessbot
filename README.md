@@ -48,8 +48,7 @@ pixi run build          # fetch pinned sources and build the workspace
 pixi run stockfish      # build the Stockfish engine
 
 pixi run router         # terminal 1: message router
-pixi run sim            # terminal 2: simulated robot and every chessbot component
-pixi run viewer         # terminal 3 (optional): Rerun debug view on :9090
+pixi run sim            # terminal 2: simulated robot, every chessbot component, Rerun viewer on :9090
 ```
 
 Open **`http://<host>:8000`**, choose your colour and strength, and press **New game**.
@@ -57,6 +56,7 @@ Open **`http://<host>:8000`**, choose your colour and strength, and press **New 
 | To… | Run |
 |---|---|
 | Record the session to `~/chessbot_recordings` | `pixi run sim record:=true` |
+| Use the desktop Rerun viewer instead of the web one | `pixi run sim viewer:=native` |
 | Check every connection in the stack | `pixi run check` |
 | Also play a short game automatically | `pixi run check --e2e --moves 4` |
 | Stop everything | `tools/dev/stop.sh` (add `--all` to stop the router) |

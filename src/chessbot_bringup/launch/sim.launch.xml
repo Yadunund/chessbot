@@ -10,6 +10,8 @@
   <arg name="rerun" default="true" description="Run the Rerun bridge." />
   <arg name="brain" default="true" description="Run the brain (game engine and orchestrator)." />
   <arg name="rerun_grpc_port" default="9876" />
+  <arg name="viewer" default="web" description="Rerun viewer: web (on web_viewer_port), native, or none." />
+  <arg name="web_viewer_port" default="9090" />
   <arg name="record" default="false" description="Also archive the Rerun stream to an .rrd file in recording_dir." />
   <arg name="recording_dir" default="$(env HOME)/chessbot_recordings" />
   <arg name="rest_port" default="8000" />
@@ -33,6 +35,7 @@
     <load_composable_node target="$(var container)">
       <composable_node pkg="rerun_ros_bridge" plugin="rerun_ros_bridge::RerunBridge" name="rerun_bridge">
         <param from="$(find-pkg-share chessbot_bringup)/config/rerun_bridge.yaml" />
+        <param name="blueprint_file" value="$(find-pkg-share chessbot_bringup)/config/chessbot.rbl" />
         <param name="grpc_port" value="$(var rerun_grpc_port)" />
         <param name="save_rrd" value="$(var record)" />
         <param name="recording_dir" value="$(var recording_dir)" />
@@ -40,6 +43,11 @@
         <extra_arg name="use_intra_process_comms" value="true" />
       </composable_node>
     </load_composable_node>
+    <include file="$(find-pkg-share rerun_ros_bridge)/launch/viewer.launch.xml">
+      <arg name="viewer" value="$(var viewer)" />
+      <arg name="grpc_url" value="rerun+http://127.0.0.1:$(var rerun_grpc_port)/proxy" />
+      <arg name="web_viewer_port" value="$(var web_viewer_port)" />
+    </include>
   </group>
 
   <!-- Motion: Cartesian planning and IK over the robot description. -->

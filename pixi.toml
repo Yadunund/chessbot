@@ -102,7 +102,8 @@ stockfish = { cmd = "make -C external/Stockfish/src -j build ARCH=native COMP=gc
 # Run
 router = { cmd = "bash -c 'exec zenohd -c config/zenoh/router.json5 --plugin-search-dir \"$CONDA_PREFIX/lib\"'" }
 sim = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup sim.launch.xml \"$@\"' --" }
-viewer = { cmd = "rerun --serve-web rerun+http://127.0.0.1:9876/proxy --web-viewer-port 9090" }
+# Regenerate the Rerun layout (src/chessbot_bringup/config/chessbot.rbl) after editing its script.
+rerun-blueprint = { cmd = "python src/chessbot_bringup/rerun/make_blueprint.py" }
 check = { cmd = "bash -c 'source install/setup.bash && exec python tools/check_stack.py \"$@\"' --" }
 
 [target.osx-arm64.tasks]

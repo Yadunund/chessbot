@@ -5,7 +5,7 @@
     application_id: chessbot
     serve_grpc: true
     grpc_port: 9876
-    memory_limit: 25%
+    server_memory_limit: 512MiB
     # Recording to .rrd is off unless the launch argument record:=true is given.
     save_rrd: false
     # Entity paths follow the rerun convention of a slash-separated tree.
@@ -18,5 +18,8 @@
     text_modes: ["log", "document"]
     joint_states_topic: "/joint_states"
     joint_states_entity: "robot/joints"
-    tf_entity_prefix: "robot/tf"
+    # The robot in 3D: URDF from robot_state_publisher, moved by /tf and /tf_static.
+    robot_description_topic: "/robot_description"
+    robot_entity: "robot/model"
     log_tf: true
+    # The layout (blueprint_file) is set in sim.launch.xml: config/chessbot.rbl.
