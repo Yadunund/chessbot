@@ -84,26 +84,28 @@ private:
     bool serve, const std::string & bind_ip, uint16_t port, const std::string & memory_limit,
     bool save, const std::string & recording_dir)
   {
-    std::vector<rerun::LogSink> sinks;
-    if (serve) {
-      // Any origin may connect: the viewer tab is served from a different port.
-      sinks.push_back(rerun::GrpcServerSink(bind_ip, port, memory_limit,
-        rerun::PlaybackBehavior::OldestFirst, {"*"}));
-    }
+    // Sinks hold string_views into their own members (and into ours), so they
+    // are kept as named locals and passed to set_sinks directly rather than
+    // converted to LogSink and stored.
     if (save && !recording_dir.empty()) {
       std::filesystem::create_directories(recording_dir);
       const auto stamp = std::chrono::system_clock::now().time_since_epoch();
       rrd_path_ = (std::filesystem::path(recording_dir) /
         ("recording_" + std::to_string(
           std::chrono::duration_cast<std::chrono::seconds>(stamp).count()) + ".rrd")).string();
-      sinks.push_back(rerun::FileSink{rrd_path_});
     }
+    // Any origin may connect: the viewer tab is served from a different port.
+    const rerun::GrpcServerSink grpc(bind_ip, port, memory_limit,
+      rerun::PlaybackBehavior::OldestFirst, {"*"});
+    const rerun::FileSink file{rrd_path_};
 
     rerun::Error err;
-    if (sinks.size() == 2) {
-      err = rec_.set_sinks(sinks[0], sinks[1]);
-    } else if (sinks.size() == 1) {
-      err = rec_.set_sinks(sinks[0]);
+    if (serve && !rrd_path_.empty()) {
+      err = rec_.set_sinks(grpc, file);
+    } else if (serve) {
+      err = rec_.set_sinks(grpc);
+    } else if (!rrd_path_.empty()) {
+      err = rec_.set_sinks(file);
     }
     if (err.is_err()) {
       RCLCPP_ERROR(get_logger(), "Failed to set up Rerun sinks: %s", err.description.c_str());

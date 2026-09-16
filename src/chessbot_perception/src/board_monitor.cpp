@@ -35,8 +35,10 @@ public:
     const auto service_name = declare_parameter<std::string>(
       "service_name", "/perception/get_board_state");
 
-    // The image callback and the service run in separate groups, so a query is
-    // answered while frames keep arriving.
+    // Frames arrive on their own callback group, so a query is answered while
+    // frames keep arriving. The service stays in the default group: on Lyrical
+    // with rmw_zenoh, a service placed in a separately created callback group is
+    // never executed (subscriptions in such groups are).
     auto image_group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     rclcpp::SubscriptionOptions sub_opts;
     sub_opts.callback_group = image_group;
@@ -47,13 +49,12 @@ public:
         latest_ = std::move(msg);
       }, sub_opts);
 
-    auto service_group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     service_ = create_service<GetBoardState>(
       service_name,
       [this](const GetBoardState::Request::SharedPtr req, GetBoardState::Response::SharedPtr res) {
         handle(*req, *res);
       },
-      rclcpp::ServicesQoS(), service_group);
+      rclcpp::ServicesQoS());
 
     RCLCPP_INFO(get_logger(), "Serving %s from %s", service_name.c_str(), image_topic.c_str());
   }
@@ -61,6 +62,7 @@ public:
 private:
   void handle(const GetBoardState::Request & req, GetBoardState::Response & res)
   {
+    RCLCPP_DEBUG(get_logger(), "GetBoardState request (max_frame_age_s=%.2f)", req.max_frame_age_s);
     sensor_msgs::msg::Image::ConstSharedPtr frame;
     {
       std::lock_guard<std::mutex> lock(mutex_);
