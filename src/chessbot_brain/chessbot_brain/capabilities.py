@@ -11,6 +11,7 @@ can be written as plain sequential code.
 from __future__ import annotations
 
 import json
+import math
 import threading
 from dataclasses import dataclass
 
@@ -29,6 +30,15 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 # Tool Z pointing straight down: 180 degrees about X.
 DOWN = (1.0, 0.0, 0.0, 0.0)
+
+
+def tool_down(yaw: float) -> tuple[float, float, float, float]:
+    """Tool pointing straight down with the jaws opening along `yaw` (x, y, z, w).
+
+    Tool frame: +Z approach, +X from the fixed jaw towards the moving jaw. This is
+    a half turn about the horizontal axis at yaw/2.
+    """
+    return (math.cos(yaw / 2), math.sin(yaw / 2), 0.0, 0.0)
 
 
 class CapabilityError(RuntimeError):
@@ -51,6 +61,11 @@ class ArmConfig:
     gripper_open: float
     gripper_closed: float
     joint_speed: float  # rad/s used for timing joint-space moves
+    # The grasp point is on the fixed jaw's inner surface. To pick, it stops this far
+    # from the piece's centre (piece radius plus clearance); to place, one piece
+    # radius, so the released piece lands centred.
+    pick_offset: float = 0.010
+    place_offset: float = 0.0075
 
 
 class Capabilities:
@@ -124,27 +139,27 @@ class Capabilities:
         pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = quat
         return pose
 
-    def solve_ik(self, xyz, frame_id: str = "base_link") -> list[float]:
+    def solve_ik(self, xyz, quat=DOWN, frame_id: str = "base_link") -> list[float]:
         if not self.ik.wait_for_service(timeout_sec=2.0):
             raise CapabilityError("IK is not available")
         request = GetPositionIK.Request()
         request.ik_request.group_name = "arm"
         request.ik_request.pose_stamped = PoseStamped()
         request.ik_request.pose_stamped.header.frame_id = frame_id
-        request.ik_request.pose_stamped.pose = self._pose(xyz)
+        request.ik_request.pose_stamped.pose = self._pose(xyz, quat)
         response = _wait(self.ik.call_async(request), 10.0, "IK")
         if response.error_code.val != MoveItErrorCodes.SUCCESS:
             raise CapabilityError(f"no IK solution for {tuple(round(v, 3) for v in xyz)}")
         by_name = dict(zip(response.solution.joint_state.name, response.solution.joint_state.position))
         return [by_name[j] for j in self.arm.joints]
 
-    def plan_cartesian(self, waypoints_xyz, frame_id: str = "base_link") -> JointTrajectory:
+    def plan_cartesian(self, waypoints_xyz, quat=DOWN, frame_id: str = "base_link") -> JointTrajectory:
         if not self.cartesian.wait_for_service(timeout_sec=2.0):
             raise CapabilityError("Cartesian planning is not available")
         request = GetCartesianPath.Request()
         request.header.frame_id = frame_id
         request.group_name = "arm"
-        request.waypoints = [self._pose(xyz) for xyz in waypoints_xyz]
+        request.waypoints = [self._pose(xyz, quat) for xyz in waypoints_xyz]
         request.max_step = 0.005
         response = _wait(self.cartesian.call_async(request), 10.0, "Cartesian planning")
         if response.fraction < 0.999:

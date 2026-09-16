@@ -89,7 +89,8 @@ class BrainNode(Node):
         self.default_robot_side = self.declare_parameter("robot_side", "black").value
         self.robot_name = self.declare_parameter("robot_name", "SO-101").value
         self.time_control_ms = int(self.declare_parameter("time_control_ms", 600_000).value)
-        self.park_joints = list(self.declare_parameter("park_joints", [0.0, -1.6, 1.55, 0.9, 0.0]).value)
+        # Folded upright over the base, clear of the board and graveyards (tools/dev/park_search.py).
+        self.park_joints = list(self.declare_parameter("park_joints", [0.0, -0.54, -1.02, -0.30, 0.0]).value)
         arm = ArmConfig(
             joints=list(
                 self.declare_parameter(
@@ -98,8 +99,12 @@ class BrainNode(Node):
                 ).value
             ),
             gripper_joint=self.declare_parameter("gripper_joint", "gripper_joint").value,
-            gripper_open=float(self.declare_parameter("gripper_open", 1.2).value),
-            gripper_closed=float(self.declare_parameter("gripper_closed", 0.1).value),
+            # 0.24 rad opens the jaws 20 mm at the grasp point: a 15 mm piece plus 2.5 mm each
+            # side (tools/dev/gripper_geometry.py). Closing commands past contact so it grips.
+            gripper_open=float(self.declare_parameter("gripper_open", 0.24).value),
+            gripper_closed=float(self.declare_parameter("gripper_closed", 0.05).value),
+            pick_offset=float(self.declare_parameter("pick_offset", 0.010).value),
+            place_offset=float(self.declare_parameter("place_offset", 0.0075).value),
             joint_speed=float(self.declare_parameter("joint_speed", 0.8).value),
         )
         zenoh_endpoint = self.declare_parameter("zenoh_endpoint", "tcp/127.0.0.1:7447").value
@@ -283,6 +288,20 @@ class BrainNode(Node):
             self._switch_clock("white")
             self.set_phase(GameState.PHASE_HUMAN_TURN)
 
+    def job_set_position(self, fen: str, robot_side: str):
+        """Dev: replace the believed position (for tests), without moving anything."""
+        try:
+            board = Board(fen)
+        except (ValueError, IndexError) as exc:
+            self.think(Thought.RECOVER, f"Not a valid FEN: {exc}")
+            return
+        self._reset_game(robot_side)
+        with self._lock:
+            self.board = board
+        self.think(Thought.EXPLAIN, f"Dev: position set to {board.fen()}.")
+        human_to_move = self.side_to_move() != robot_side
+        self.set_phase(GameState.PHASE_HUMAN_TURN if human_to_move else GameState.PHASE_IDLE)
+
     def job_press_clock(self, move: str | None):
         with self._lock:
             if self.phase != GameState.PHASE_HUMAN_TURN:
@@ -404,7 +423,7 @@ class BrainNode(Node):
         self.set_phase(GameState.PHASE_MOVING)
         geometry = self.geometry()
         self.think(Thought.ACT, f"Demo: transfer {src} → {dst}.")
-        skills.transfer(self.caps, geometry.square_centre(src), geometry.square_centre(dst))
+        skills.transfer(self.caps, geometry.square_centre(src), geometry.square_centre(dst), geometry.diagonal_yaws())
         skills.park(self.caps, self.park_joints)
         self.set_phase(previous)
 
@@ -419,6 +438,11 @@ class NewGame(BaseModel):
 
 class PressClock(BaseModel):
     move: str | None = None
+
+
+class SetPosition(BaseModel):
+    fen: str
+    robot_side: str = "black"
 
 
 class DemoTransfer(BaseModel):
@@ -464,6 +488,12 @@ def build_app(node: BrainNode) -> FastAPI:
     @app.post("/api/resume")
     def resume():
         return submit("resume", node.job_resume)
+
+    @app.post("/api/dev/set_position")
+    def set_position(body: SetPosition):
+        if body.robot_side not in ("white", "black"):
+            raise HTTPException(status_code=422, detail="robot_side must be white or black")
+        return submit("set_position", node.job_set_position, body.fen, body.robot_side)
 
     @app.post("/api/demo_transfer")
     def demo_transfer(body: DemoTransfer):

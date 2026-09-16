@@ -8,8 +8,11 @@ this planner or against MoveIt itself:
 - ``/compute_ik`` (moveit_msgs/srv/GetPositionIK)
 - ``/compute_cartesian_path`` (moveit_msgs/srv/GetCartesianPath)
 
-The arm is 5-DoF, so only the *direction* of the target pose's Z axis is used
-as the tool's approach direction; roll about that axis is left free.
+Tool frame convention for target poses: +Z is the approach direction and +X the
+direction the jaws open (from the fixed jaw towards the moving jaw). The target
+position is the grasp point on the fixed jaw's inner surface. Both axes are
+honoured; the approach may tilt up to max_approach_tilt_deg where a vertical
+tool cannot reach.
 The start state comes from the request if given, otherwise from /joint_states,
 and the model from the latched /robot_description topic.
 """
@@ -33,6 +36,7 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from chessbot_motion.kinematics import ArmKinematics
 
+TOOL_X = np.array([1.0, 0.0, 0.0])
 TOOL_Z = np.array([0.0, 0.0, 1.0])
 
 
@@ -51,10 +55,10 @@ def quat_to_matrix(q) -> np.ndarray:
     )
 
 
-def pose_target(pose) -> tuple[np.ndarray, np.ndarray]:
+def pose_target(pose) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     position = np.array([pose.position.x, pose.position.y, pose.position.z])
-    approach = quat_to_matrix(pose.orientation) @ TOOL_Z
-    return position, approach
+    rotation = quat_to_matrix(pose.orientation)
+    return position, rotation @ TOOL_Z, rotation @ TOOL_X
 
 
 class MotionNode(Node):
@@ -66,6 +70,9 @@ class MotionNode(Node):
         ).value
         self.tip_frame = self.declare_parameter("tip_frame", "gripper_frame_link").value
         self.approach_ref_frame = self.declare_parameter("approach_ref_frame", "gripper_link").value
+        # Direction the jaws open (fixed towards moving jaw) in tip_frame, measured with
+        # tools/dev/gripper_geometry.py.
+        self.opening_axis = list(self.declare_parameter("opening_axis", [-1.0, 0.0, 0.0]).value)
         self.max_joint_velocity = float(self.declare_parameter("max_joint_velocity", 0.8).value)
         self.accepted_frames = set(self.declare_parameter("accepted_frames", ["", "world", "base_link"]).value)
         self.max_approach_tilt_deg = float(self.declare_parameter("max_approach_tilt_deg", 25.0).value)
@@ -94,6 +101,7 @@ class MotionNode(Node):
                 self.tip_frame,
                 self.approach_ref_frame,
                 max_approach_tilt_rad=np.radians(self.max_approach_tilt_deg),
+                opening_axis=tuple(self.opening_axis),
             )
         except Exception as exc:  # noqa: BLE001 - report any model error and keep serving
             self.get_logger().error(f"Could not build kinematics from robot_description: {exc}")
@@ -128,8 +136,8 @@ class MotionNode(Node):
             response.error_code.val = MoveItErrorCodes.FRAME_TRANSFORM_FAILURE
             return response
 
-        position, approach = pose_target(ik.pose_stamped.pose)
-        result = kin.solve_with_restarts(position, approach, seed)
+        position, approach, opening = pose_target(ik.pose_stamped.pose)
+        result = kin.solve_with_restarts(position, approach, seed, target_opening=opening)
         if not result.success:
             response.error_code.val = MoveItErrorCodes.NO_IK_SOLUTION
             return response

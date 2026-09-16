@@ -36,6 +36,15 @@ class BoardGeometry:
         ox, oy, oz = self.origin_xyz
         return ox + c * bx - s * by, oy + s * bx + c * by, oz
 
+    def diagonal_yaws(self) -> list[float]:
+        """Robot-frame yaws along the board's diagonals, where neighbouring pieces are farthest.
+
+        Opening the jaws along a diagonal leaves about 1.4 squares to the next piece
+        instead of 1. All four are returned (the jaws are not symmetric), for the
+        caller to try in order.
+        """
+        return [self.yaw_rad + math.radians(a) for a in (45.0, 135.0, -45.0, -135.0)]
+
     def square_centre(self, square: str) -> tuple[float, float, float]:
         index = square_index(square)
         file, rank = index % 8, index // 8

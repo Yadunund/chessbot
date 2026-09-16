@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Inverse kinematics and Cartesian interpolation for a serial arm, on Pinocchio and SciPy.
 
-ROS-free so it can be tested on its own. The IK solves for tool *position* and
-*approach direction*, which is exactly what a 5-DoF arm like the SO-101 can
-control: roll about the approach axis is left free.
+ROS-free so it can be tested on its own. The IK solves for tool *position*,
+*approach direction* and, optionally, the *opening direction* of the jaws (roll
+about the approach axis). A 5-DoF arm like the SO-101 can set all three for a
+vertical approach; roll is left free when no opening direction is given.
 """
 
 from __future__ import annotations
@@ -41,10 +42,13 @@ class ArmKinematics:
         tip_frame: str,
         approach_ref_frame: str,
         max_approach_tilt_rad: float = np.radians(25.0),
+        opening_axis: tuple[float, float, float] = (-1.0, 0.0, 0.0),
+        roll_tolerance_rad: float = np.radians(5.0),
     ):
         # Far from the base a top-down approach may be out of reach; the tool is
         # allowed to tilt up to this much from the requested approach direction.
         self.max_approach_tilt_rad = max_approach_tilt_rad
+        self.roll_tolerance_rad = roll_tolerance_rad
         self.model = pin.buildModelFromXML(urdf_xml)
         self.data = self.model.createData()
         self.joint_names = list(joint_names)
@@ -68,6 +72,11 @@ class ArmKinematics:
         a_world = self.data.oMf[self.tip].translation - self.data.oMf[self.ref].translation
         a_world /= np.linalg.norm(a_world)
         self.approach_local = self.data.oMf[self.tip].rotation.T @ a_world
+        # The jaws' opening direction (fixed jaw towards moving jaw) in the tip frame,
+        # made perpendicular to the approach axis.
+        opening = np.asarray(opening_axis, dtype=float)
+        opening = opening - (opening @ self.approach_local) * self.approach_local
+        self.opening_local = opening / np.linalg.norm(opening)
 
     def _full_q(self, q_chain: np.ndarray) -> np.ndarray:
         q = pin.neutral(self.model)
@@ -76,19 +85,36 @@ class ArmKinematics:
 
     def forward(self, q_chain: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Tool position and approach direction (unit vector) in the model root frame."""
+        position, approach, _ = self.forward_full(q_chain)
+        return position, approach
+
+    def forward_full(self, q_chain: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Tool position, approach direction and jaw opening direction in the model root frame."""
         q = self._full_q(q_chain)
         pin.framesForwardKinematics(self.model, self.data, q)
         tip = self.data.oMf[self.tip]
-        return tip.translation.copy(), tip.rotation @ self.approach_local
+        return tip.translation.copy(), tip.rotation @ self.approach_local, tip.rotation @ self.opening_local
 
     def tool_pose(self, q_chain: np.ndarray) -> pin.SE3:
         q = self._full_q(q_chain)
         pin.framesForwardKinematics(self.model, self.data, q)
         return pin.SE3(self.data.oMf[self.tip])
 
-    def _residual(self, q_chain: np.ndarray, target_position: np.ndarray, target_approach: np.ndarray, weight: float):
-        position, approach = self.forward(q_chain)
-        return np.concatenate([position - target_position, weight * (approach - target_approach)])
+    def _residual(self, q_chain, target_position, target_approach, weight, target_opening=None):
+        position, approach, opening = self.forward_full(q_chain)
+        parts = [position - target_position, weight * (approach - target_approach)]
+        if target_opening is not None:
+            parts.append(weight * (opening - target_opening))
+        return np.concatenate(parts)
+
+    @staticmethod
+    def _roll_error(opening, approach, target_opening) -> float:
+        """Angle between the jaw opening and the target, about the approach axis."""
+        projected = target_opening - (target_opening @ approach) * approach
+        norm = np.linalg.norm(projected)
+        if norm < 1e-9:
+            return np.pi
+        return float(np.arccos(np.clip(opening @ (projected / norm), -1.0, 1.0)))
 
     def solve(
         self,
@@ -100,6 +126,7 @@ class ArmKinematics:
         approach_tolerance_rad: float = np.radians(3.0),
         weights: tuple[float, ...] = (0.3, 0.1, 0.03, 0.01),
         max_evaluations: int = 300,
+        target_opening: np.ndarray | None = None,
     ) -> IkResult:
         """Bounded least squares on position and approach direction from one seed.
 
@@ -112,6 +139,9 @@ class ArmKinematics:
         target_position = np.asarray(target_position, dtype=float)
         target_approach = np.asarray(target_approach, dtype=float)
         target_approach = target_approach / np.linalg.norm(target_approach)
+        if target_opening is not None:
+            target_opening = np.asarray(target_opening, dtype=float)
+            target_opening = target_opening / np.linalg.norm(target_opening)
         x0 = np.clip(np.asarray(seed, dtype=float), self.lower + 1e-6, self.upper - 1e-6)
         best: IkResult | None = None
         for weight in weights:
@@ -119,16 +149,19 @@ class ArmKinematics:
                 self._residual,
                 x0,
                 bounds=(self.lower, self.upper),
-                args=(target_position, target_approach, weight),
+                args=(target_position, target_approach, weight, target_opening),
                 method="trf",
                 xtol=1e-10,
                 ftol=1e-10,
                 max_nfev=max_evaluations,
             )
-            position, approach = self.forward(fit.x)
+            position, approach, opening = self.forward_full(fit.x)
             pos_err = float(np.linalg.norm(position - target_position))
             ang_err = float(np.arccos(np.clip(approach @ target_approach, -1.0, 1.0)))
-            result = IkResult(fit.x, pos_err < position_tolerance and ang_err < approach_tolerance_rad, pos_err, ang_err)
+            roll_ok = target_opening is None or self._roll_error(opening, approach, target_opening) < self.roll_tolerance_rad
+            result = IkResult(
+                fit.x, pos_err < position_tolerance and ang_err < approach_tolerance_rad and roll_ok, pos_err, ang_err
+            )
             if result.success:
                 return result
             if best is None or pos_err < best.position_error:
@@ -145,6 +178,7 @@ class ArmKinematics:
         seeds_to_refine: int = 4,
         restarts: int = 2,
         rng: np.random.Generator | None = None,
+        target_opening: np.ndarray | None = None,
     ) -> IkResult:
         """IK that does not depend on a good seed.
 
@@ -168,7 +202,13 @@ class ArmKinematics:
         for tolerance in (np.radians(3.0), self.max_approach_tilt_rad):
             best: IkResult | None = None
             for candidate_seed in seeds:
-                result = self.solve(target_position, target_approach, candidate_seed, approach_tolerance_rad=tolerance)
+                result = self.solve(
+                    target_position,
+                    target_approach,
+                    candidate_seed,
+                    approach_tolerance_rad=tolerance,
+                    target_opening=target_opening,
+                )
                 last = result
                 if result.success and (best is None or np.linalg.norm(result.q - seed) < np.linalg.norm(best.q - seed)):
                     best = result
@@ -179,33 +219,41 @@ class ArmKinematics:
     def cartesian_path(
         self,
         start_q: np.ndarray,
-        waypoints: list[tuple[np.ndarray, np.ndarray]],
+        waypoints: list[tuple],
         max_step: float = 0.005,
     ) -> tuple[list[np.ndarray], float]:
-        """Follow straight lines through waypoints (position, approach).
+        """Follow straight lines through waypoints: (position, approach) or (position, approach, opening).
 
         Returns the joint configurations reached and the fraction of the path
         achieved (1.0 when every interpolated point was solved).
         """
         configs = [np.asarray(start_q, dtype=float)]
-        position, approach = self.forward(configs[0])
+        position, approach, opening = self.forward_full(configs[0])
         segments = []
         total = 0.0
-        for target_pos, target_app in waypoints:
-            length = float(np.linalg.norm(np.asarray(target_pos) - position))
-            segments.append((position, approach, np.asarray(target_pos, float), np.asarray(target_app, float), length))
+        for waypoint in waypoints:
+            target_pos, target_app = np.asarray(waypoint[0], float), np.asarray(waypoint[1], float)
+            target_open = np.asarray(waypoint[2], float) if len(waypoint) > 2 and waypoint[2] is not None else None
+            length = float(np.linalg.norm(target_pos - position))
+            segments.append((position, approach, opening, target_pos, target_app, target_open, length))
             total += length
-            position, approach = np.asarray(target_pos, float), np.asarray(target_app, float)
+            position, approach, opening = target_pos, target_app, target_open
 
         done = 0.0
-        for p0, a0, p1, a1, length in segments:
+        for p0, a0, o0, p1, a1, o1, length in segments:
             steps = max(1, int(np.ceil(length / max_step)))
             for i in range(1, steps + 1):
                 s = i / steps
                 p = (1 - s) * p0 + s * p1
                 a = (1 - s) * a0 + s * a1
                 a /= np.linalg.norm(a)
-                result = self.solve(p, a, configs[-1], approach_tolerance_rad=self.max_approach_tilt_rad)
+                o = None
+                if o1 is not None:
+                    o = o1 if o0 is None else (1 - s) * o0 + s * o1
+                    o = o / np.linalg.norm(o)
+                result = self.solve(
+                    p, a, configs[-1], approach_tolerance_rad=self.max_approach_tilt_rad, target_opening=o
+                )
                 if not result.success:
                     return configs, (done + (i - 1) / steps * length) / total if total > 0 else 0.0
                 configs.append(result.q)

@@ -43,6 +43,7 @@ contract. For example, `chessbot_motion` could be replaced by MoveIt.
 | POST | `/api/calibrate` | — | run the calibration action |
 | POST | `/api/park` | — | park the arm |
 | POST | `/api/resume` | — | leave `needs_help` and hand the turn to the human |
+| POST | `/api/dev/set_position` | `{"fen": "...", "robot_side": "black"}` | dev: replace the believed position without moving anything (tests) |
 | POST | `/api/demo_transfer` | `{"src": "e2", "dst": "e4"}` | dev: move a piece between squares |
 
 Jobs run one at a time. A command arriving while one runs gets HTTP 409.

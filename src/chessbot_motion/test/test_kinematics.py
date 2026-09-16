@@ -64,3 +64,20 @@ def test_far_edge_of_workspace_solves_cold(kin):
     target = np.array([0.0388 + 0.30, 0.0, 0.015])
     result = kin.solve_with_restarts(target, np.array([0.0, 0.0, -1.0]), np.zeros(len(JOINTS)))
     assert result.success
+
+
+def test_jaw_opening_direction_is_honoured(kin):
+    # Vertical grasp over the board with the jaws opening along a diagonal, both ways.
+    target = np.array([0.0388 + 0.195, 0.03, 0.03])
+    down = np.array([0.0, 0.0, -1.0])
+    # The wrist roll's limits rule out some yaws at a given spot, so require most diagonals,
+    # and the right roll whenever a solution is reported.
+    solved = 0
+    for yaw in np.radians([45.0, 135.0, -45.0, -135.0]):
+        opening = np.array([np.cos(yaw), np.sin(yaw), 0.0])
+        result = kin.solve_with_restarts(target, down, np.zeros(len(JOINTS)), target_opening=opening)
+        if result.success:
+            solved += 1
+            _, approach, achieved = kin.forward_full(result.q)
+            assert np.degrees(kin._roll_error(achieved, approach, opening)) < 5.0
+    assert solved >= 3
