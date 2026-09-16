@@ -9,7 +9,8 @@ calibration, the brain's REST API and state topics, the browser's SSE path, and
 the Rerun stream.
 
     pixi run check            # connectivity only
-    pixi run check --e2e      # also play one move in simulation
+    pixi run check --e2e              # also play a move in simulation
+    pixi run check --e2e --moves 4    # a short game: random legal human moves, Stockfish replies
 """
 
 from __future__ import annotations
@@ -228,10 +229,13 @@ def check_brain_and_ui():
         pass  # busy is fine: any state publication will do
     ok = wait_for(lambda: bool(events), 35.0)
     detail = ""
+    sample = None
     if ok:
         sample = json.loads(events[0].split("data:", 1)[1])
         detail = sample["key"].split("/RIHS01")[0]
     record("browser path: game state over router SSE", ok, detail)
+    if sample is not None:
+        check_browser_decoder(sample["value"])
 
     try:
         with socket.create_connection(("127.0.0.1", 9876), timeout=3.0):
@@ -240,38 +244,99 @@ def check_brain_and_ui():
         record("Rerun gRPC stream on :9876", False, str(exc))
 
 
-def check_end_to_end(probe: Probe):
-    print("End to end (simulation)")
+def check_browser_decoder(value_b64: str):
+    """Decode a real GameState sample with the UI's own cdr.js, using Node if present."""
+    import pathlib
+    import shutil
+    import subprocess
 
-    def phase() -> str:
-        return http("GET", f"{BRAIN}/api/state")[1]["phase"]
-
-    def wait_phase(target: str, timeout: float) -> bool:
-        return wait_for(lambda: phase() == target, timeout, interval=1.0)
-
-    wait_for(lambda: phase() not in ("moving", "setup", "verifying", "thinking"), 60.0, interval=1.0)
-    http("POST", f"{BRAIN}/api/new_game", {"robot_side": "black"})
-    record("new game reaches human_turn", wait_phase("human_turn", 90.0), f"phase={phase()}")
-
-    before = list(probe.received["/joint_states"].position)
-    thoughts_before = probe.thought_count
-    http("POST", f"{BRAIN}/api/press_clock", {"move": "e2e4"})
-    wait_for(lambda: phase() != "human_turn", 10.0, interval=0.5)
-    moved = wait_phase("human_turn", 240.0)
-    snapshot = http("GET", f"{BRAIN}/api/state")[1]
-    after = list(probe.received["/joint_states"].position)
-    record(
-        "human e2e4 → robot replies and hands the turn back",
-        moved and len(snapshot["moves"]) == 2,
-        f"moves={snapshot['moves']} phase={snapshot['phase']} error={snapshot['last_error'] or '-'}",
+    node = shutil.which("node")
+    cdr = pathlib.Path(__file__).resolve().parent.parent / "src" / "chessbot_web" / "web" / "cdr.js"
+    if node is None:
+        print("  SKIP  browser CDR decoder (node not installed)")
+        return
+    script = (
+        f"import {{ base64ToBytes, decodeGameState }} from {json.dumps(cdr.as_uri())};"
+        f"const s = decodeGameState(base64ToBytes({json.dumps(value_b64)}));"
+        "console.log(JSON.stringify({ phase: s.phase, fen: s.fen, moves: s.moves }));"
     )
-    record("arm moved in simulation", any(abs(a - b) > 0.05 for a, b in zip(before, after)))
-    record("thought feed published", probe.thought_count - thoughts_before >= 4, f"{probe.thought_count - thoughts_before} thoughts")
+    result = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=20)
+    try:
+        decoded = json.loads(result.stdout.strip().splitlines()[-1])
+        ok = decoded["fen"].count("/") == 7
+        record("browser CDR decoder (cdr.js) on a live sample", ok, f"phase={decoded['phase']} fen={decoded['fen'].split()[0]}")
+    except Exception:  # noqa: BLE001
+        record("browser CDR decoder (cdr.js) on a live sample", False, (result.stderr or result.stdout)[-200:])
+
+
+def check_end_to_end(probe: Probe, moves: int):
+    print(f"End to end (simulation, {moves} full move{'s' if moves != 1 else ''})")
+    import os
+    import random
+
+    from chessbot_brain.engine import UciEngine
+
+    def state() -> dict:
+        return http("GET", f"{BRAIN}/api/state")[1]
+
+    def wait_phase(targets: tuple[str, ...], timeout: float) -> bool:
+        return wait_for(lambda: state()["phase"] in targets, timeout, interval=1.0)
+
+    wait_for(lambda: state()["phase"] not in ("moving", "setup", "verifying", "thinking"), 120.0, interval=1.0)
+    http("POST", f"{BRAIN}/api/new_game", {"robot_side": "black"})
+    record("new game reaches human_turn", wait_phase(("human_turn",), 90.0), f"phase={state()['phase']}")
+
+    illegal_before = len(state()["moves"])
+    http("POST", f"{BRAIN}/api/press_clock", {"move": "e2e5"})
+    wait_phase(("human_turn",), 30.0)
+    time.sleep(2.0)
+    snapshot = state()
+    record(
+        "illegal human move is rejected",
+        snapshot["phase"] == "human_turn" and len(snapshot["moves"]) == illegal_before,
+        snapshot["thoughts"][-1]["text"] if snapshot["thoughts"] else "",
+    )
+
+    stockfish = os.path.join(os.environ.get("PIXI_PROJECT_ROOT", "."), "generated", "bin", "stockfish")
+    engine = UciEngine(stockfish, threads=1) if os.path.isfile(stockfish) else None
+    rng = random.Random(7)
+    start_joints = list(probe.received["/joint_states"].position)
+    thoughts_before = probe.thought_count
+    played = 0
+    try:
+        for _ in range(moves):
+            snapshot = state()
+            if snapshot["phase"] != "human_turn":
+                break
+            legal = engine.legal_moves(snapshot["fen"]) if engine else ["e2e4"]
+            human = rng.choice(legal)
+            count = len(snapshot["moves"])
+            http("POST", f"{BRAIN}/api/press_clock", {"move": human})
+            ok = wait_for(lambda c=count: len(state()["moves"]) >= c + 2 or state()["phase"] in ("needs_help", "game_over"), 300.0, interval=1.0)
+            wait_phase(("human_turn", "needs_help", "game_over"), 120.0)
+            snapshot = state()
+            good = ok and snapshot["phase"] in ("human_turn", "game_over") and not snapshot["last_error"]
+            record(
+                f"move {count // 2 + 1}: human {human} → robot {snapshot['moves'][-1] if len(snapshot['moves']) > count + 1 else '-'}",
+                good,
+                f"phase={snapshot['phase']} error={snapshot['last_error'] or '-'}",
+            )
+            if not good:
+                break
+            played += 1
+    finally:
+        if engine:
+            engine.close()
+
+    end_joints = list(probe.received["/joint_states"].position)
+    record("arm moved in simulation", any(abs(a - b) > 0.05 for a, b in zip(start_joints, end_joints)) or played > 0)
+    record("thought feed published", probe.thought_count - thoughts_before >= 4 * max(played, 1), f"{probe.thought_count - thoughts_before} thoughts")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--e2e", action="store_true", help="also play one move end to end in simulation")
+    parser.add_argument("--e2e", action="store_true", help="also play moves end to end in simulation")
+    parser.add_argument("--moves", type=int, default=1, help="full moves to play with --e2e")
     args = parser.parse_args()
 
     rclpy.init()
@@ -285,7 +350,7 @@ def main() -> int:
         check_services(probe)
         check_brain_and_ui()
         if args.e2e:
-            check_end_to_end(probe)
+            check_end_to_end(probe, args.moves)
     finally:
         executor.shutdown()
         probe.destroy_node()
