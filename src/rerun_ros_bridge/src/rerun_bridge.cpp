@@ -1,0 +1,235 @@
+// Copyright 2026 Yadunund Vijay
+// SPDX-License-Identifier: Apache-2.0
+
+// A generic ROS 2 -> Rerun bridge, as a composable node.
+//
+// Load it into the same container as the image publishers with
+// use_intra_process_comms so frames arrive by pointer. It serves a Rerun gRPC
+// stream that the stock web or native viewer connects to, and can archive the
+// same data to an .rrd file.
+//
+// Nothing here is specific to any application: what to log is configured by
+// parameters (topic -> entity path).
+
+#include <chrono>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_components/register_node_macro.hpp>
+#include <rerun.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
+
+#include "rerun_ros_bridge/image_conversion.hpp"
+
+namespace rerun_ros_bridge
+{
+
+class RerunBridge : public rclcpp::Node
+{
+public:
+  explicit RerunBridge(const rclcpp::NodeOptions & options)
+  : rclcpp::Node("rerun_bridge", options),
+    rec_(declare_parameter<std::string>("application_id", "ros"))
+  {
+    const bool serve = declare_parameter<bool>("serve_grpc", true);
+    const auto bind_ip = declare_parameter<std::string>("grpc_bind", "0.0.0.0");
+    const auto port = static_cast<uint16_t>(declare_parameter<int>("grpc_port", 9876));
+    const auto memory_limit = declare_parameter<std::string>("server_memory_limit", "512MiB");
+    const bool save = declare_parameter<bool>("save_rrd", false);
+    const auto recording_dir = declare_parameter<std::string>("recording_dir", "");
+
+    image_period_ = std::chrono::duration<double>(
+      1.0 / std::max(0.01, declare_parameter<double>("image_rate_hz", 5.0)));
+    image_max_width_ = static_cast<uint32_t>(declare_parameter<int>("image_max_width", 640));
+
+    setup_sinks(serve, bind_ip, port, memory_limit, save, recording_dir);
+
+    // Each subscription gets its own callback group so a slow image conversion
+    // never delays joint states when the container runs a multi-threaded
+    // executor.
+    auto image_topics = declare_parameter<std::vector<std::string>>(
+      "image_topics", std::vector<std::string>{});
+    auto image_entities = declare_parameter<std::vector<std::string>>(
+      "image_entities", std::vector<std::string>{});
+    subscribe_images(image_topics, image_entities);
+
+    auto compressed_topics = declare_parameter<std::vector<std::string>>(
+      "compressed_image_topics", std::vector<std::string>{});
+    auto compressed_entities = declare_parameter<std::vector<std::string>>(
+      "compressed_image_entities", std::vector<std::string>{});
+    subscribe_compressed_images(compressed_topics, compressed_entities);
+
+    const auto joint_topic = declare_parameter<std::string>("joint_states_topic", "");
+    joint_entity_ = declare_parameter<std::string>("joint_states_entity", "joints");
+    if (!joint_topic.empty()) {
+      auto group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+      rclcpp::SubscriptionOptions opts;
+      opts.callback_group = group;
+      joint_sub_ = create_subscription<sensor_msgs::msg::JointState>(
+        joint_topic, rclcpp::SensorDataQoS(),
+        [this](sensor_msgs::msg::JointState::ConstSharedPtr msg) {on_joint_state(*msg);}, opts);
+    }
+  }
+
+private:
+  void setup_sinks(
+    bool serve, const std::string & bind_ip, uint16_t port, const std::string & memory_limit,
+    bool save, const std::string & recording_dir)
+  {
+    std::vector<rerun::LogSink> sinks;
+    if (serve) {
+      // Any origin may connect: the viewer tab is served from a different port.
+      sinks.push_back(rerun::GrpcServerSink(bind_ip, port, memory_limit,
+        rerun::PlaybackBehavior::OldestFirst, {"*"}));
+    }
+    if (save && !recording_dir.empty()) {
+      std::filesystem::create_directories(recording_dir);
+      const auto stamp = std::chrono::system_clock::now().time_since_epoch();
+      rrd_path_ = (std::filesystem::path(recording_dir) /
+        ("recording_" + std::to_string(
+          std::chrono::duration_cast<std::chrono::seconds>(stamp).count()) + ".rrd")).string();
+      sinks.push_back(rerun::FileSink{rrd_path_});
+    }
+
+    rerun::Error err;
+    if (sinks.size() == 2) {
+      err = rec_.set_sinks(sinks[0], sinks[1]);
+    } else if (sinks.size() == 1) {
+      err = rec_.set_sinks(sinks[0]);
+    }
+    if (err.is_err()) {
+      RCLCPP_ERROR(get_logger(), "Failed to set up Rerun sinks: %s", err.description.c_str());
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "Rerun: grpc=%s port=%u rrd=%s", serve ? "on" : "off", port,
+      rrd_path_.empty() ? "off" : rrd_path_.c_str());
+  }
+
+  void subscribe_images(
+    const std::vector<std::string> & topics, const std::vector<std::string> & entities)
+  {
+    for (size_t i = 0; i < topics.size(); ++i) {
+      const std::string entity = i < entities.size() ? entities[i] : topics[i];
+      auto group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+      rclcpp::SubscriptionOptions opts;
+      opts.callback_group = group;
+      image_subs_.push_back(create_subscription<sensor_msgs::msg::Image>(
+        topics[i], rclcpp::SensorDataQoS(),
+        [this, entity](sensor_msgs::msg::Image::ConstSharedPtr msg) {on_image(entity, *msg);},
+        opts));
+    }
+  }
+
+  void subscribe_compressed_images(
+    const std::vector<std::string> & topics, const std::vector<std::string> & entities)
+  {
+    for (size_t i = 0; i < topics.size(); ++i) {
+      const std::string entity = i < entities.size() ? entities[i] : topics[i];
+      auto group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+      rclcpp::SubscriptionOptions opts;
+      opts.callback_group = group;
+      compressed_subs_.push_back(create_subscription<sensor_msgs::msg::CompressedImage>(
+        topics[i], rclcpp::SensorDataQoS(),
+        [this, entity](sensor_msgs::msg::CompressedImage::ConstSharedPtr msg) {
+          on_compressed_image(entity, *msg);
+        }, opts));
+    }
+  }
+
+  // Rate-limit per entity so a 30 fps camera does not flood the viewer.
+  bool due(const std::string & entity)
+  {
+    std::lock_guard<std::mutex> lock(rate_mutex_);
+    const auto now = std::chrono::steady_clock::now();
+    auto it = last_logged_.find(entity);
+    if (it != last_logged_.end() && now - it->second < image_period_) {
+      return false;
+    }
+    last_logged_[entity] = now;
+    return true;
+  }
+
+  void set_time(const builtin_interfaces::msg::Time & stamp) const
+  {
+    rec_.set_time_timestamp_nanos_since_epoch(
+      "ros_time", static_cast<int64_t>(stamp.sec) * 1000000000LL + stamp.nanosec);
+  }
+
+  void on_image(const std::string & entity, const sensor_msgs::msg::Image & msg)
+  {
+    if (!due(entity)) {
+      return;
+    }
+    const auto info = lookup_encoding(msg.encoding);
+    if (!info) {
+      RCLCPP_WARN_ONCE(get_logger(), "Unsupported image encoding '%s' on %s", msg.encoding.c_str(),
+        entity.c_str());
+      return;
+    }
+    auto packed = pack_image(msg.data.data(), msg.data.size(), msg.width, msg.height, msg.step,
+      *info, msg.is_bigendian, image_max_width_);
+    if (packed.width == 0) {
+      RCLCPP_WARN_ONCE(get_logger(), "Malformed image on %s", entity.c_str());
+      return;
+    }
+
+    set_time(msg.header.stamp);
+    const rerun::WidthHeight resolution{packed.width, packed.height};
+    const auto datatype = static_cast<rerun::encodings::ChannelDatatype>(info->channel_datatype);
+    auto bytes = rerun::Collection<uint8_t>::take_ownership(std::move(packed.bytes));
+    if (info->layout == PixelLayout::kDepth) {
+      rec_.log(entity, rerun::DepthImage(bytes.data(), resolution, datatype)
+        .with_meter(info->depth_meter));
+    } else {
+      rec_.log(entity, rerun::Image(std::move(bytes), resolution,
+        static_cast<rerun::encodings::ColorModel>(info->color_model), datatype));
+    }
+  }
+
+  void on_compressed_image(const std::string & entity, const sensor_msgs::msg::CompressedImage & msg)
+  {
+    if (!due(entity)) {
+      return;
+    }
+    set_time(msg.header.stamp);
+    // ROS formats look like "jpeg" or "rgb8; jpeg compressed bgr8".
+    const bool png = msg.format.find("png") != std::string::npos;
+    // Borrowed, not copied: log() serialises synchronously before returning.
+    rec_.log(entity, rerun::EncodedImage::from_bytes(
+      rerun::Collection<uint8_t>::borrow(msg.data.data(), msg.data.size()),
+      png ? rerun::MediaType::png() : rerun::MediaType::jpeg()));
+  }
+
+  void on_joint_state(const sensor_msgs::msg::JointState & msg)
+  {
+    set_time(msg.header.stamp);
+    for (size_t i = 0; i < msg.name.size() && i < msg.position.size(); ++i) {
+      rec_.log(joint_entity_ + "/" + msg.name[i], rerun::Scalars(msg.position[i]));
+    }
+  }
+
+  rerun::RecordingStream rec_;
+  std::string rrd_path_;
+  std::chrono::duration<double> image_period_{0.2};
+  uint32_t image_max_width_{640};
+  std::string joint_entity_;
+
+  std::mutex rate_mutex_;
+  std::unordered_map<std::string, std::chrono::steady_clock::time_point> last_logged_;
+
+  std::vector<rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr> image_subs_;
+  std::vector<rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr> compressed_subs_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_sub_;
+};
+
+}  // namespace rerun_ros_bridge
+
+RCLCPP_COMPONENTS_REGISTER_NODE(rerun_ros_bridge::RerunBridge)

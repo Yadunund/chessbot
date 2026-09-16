@@ -1,0 +1,17 @@
+# Example configuration for rerun_ros_bridge.
+/**:
+  ros__parameters:
+    application_id: my_robot
+    serve_grpc: true          # viewer connects to rerun+http://<host>:<grpc_port>/proxy
+    grpc_port: 9876
+    server_memory_limit: 512MiB
+    save_rrd: true
+    recording_dir: /tmp/recordings
+    image_topics: ["/camera/image_raw"]
+    image_entities: ["cameras/front"]
+    image_rate_hz: 5.0        # per image topic
+    image_max_width: 640      # downscale larger frames for the live stream; 0 disables
+    compressed_image_topics: []
+    compressed_image_entities: []
+    joint_states_topic: /joint_states
+    joint_states_entity: robot/joints
