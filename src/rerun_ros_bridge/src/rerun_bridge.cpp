@@ -173,8 +173,19 @@ private:
 
   void set_time(const builtin_interfaces::msg::Time & stamp) const
   {
-    rec_.set_time_timestamp_nanos_since_epoch(
-      "ros_time", static_cast<int64_t>(stamp.sec) * 1000000000LL + stamp.nanosec);
+    set_time(static_cast<int64_t>(stamp.sec) * 1000000000LL + stamp.nanosec);
+  }
+
+  // Wall-clock stamps show as dates. Simulation time starts at zero, so a stamp before
+  // 2000 is shown as elapsed time instead of a date in 1970.
+  void set_time(int64_t nanos) const
+  {
+    static constexpr int64_t kYear2000Nanos = 946684800LL * 1000000000LL;
+    if (nanos < kYear2000Nanos) {
+      rec_.set_time_duration_nanos("ros_time", nanos);
+    } else {
+      rec_.set_time_timestamp_nanos_since_epoch("ros_time", nanos);
+    }
   }
 
   void on_image(const std::string & entity, const sensor_msgs::msg::Image & msg)
@@ -261,11 +272,13 @@ private:
         topic, type, qos,
         [this, entity, as_log, renderer](std::shared_ptr<const rclcpp::SerializedMessage> msg) {
           const std::string text = renderer->render(*msg);
-          rec_.set_time_timestamp_nanos_since_epoch("ros_time", now().nanoseconds());
+          set_time(now().nanoseconds());
           if (as_log) {
             rec_.log(entity, rerun::TextLog(text));
           } else {
-            rec_.log(entity, rerun::TextDocument(text).with_media_type(rerun::MediaType::markdown()));
+            // A fenced block keeps the YAML's line breaks and indentation.
+            rec_.log(entity, rerun::TextDocument("```yaml\n" + text + "\n```")
+              .with_media_type(rerun::MediaType::markdown()));
           }
         });
       RCLCPP_INFO(get_logger(), "Logging %s (%s) as text at %s", topic.c_str(), type.c_str(), entity.c_str());
