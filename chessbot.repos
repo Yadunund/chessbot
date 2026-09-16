@@ -1,4 +1,10 @@
 repositories:
+  # Generic ROS 2 -> Rerun bridge (Apache-2.0), a composable node in robot_io.
+  # Private for now: cloned over SSH, so it needs a GitHub key with access.
+  rerun_ros_bridge:
+    type: git
+    url: git@github.com:Yadunund/rerun_ros_bridge.git
+    version: 6b649cef4ddcdea7ea1768bb802dcc741c5e88e1
   # SO-101 URDF/xacro descriptions (BSD-3-Clause). Same pin as ros-physical-ai/demos.
   ros2_so_arm:
     type: git

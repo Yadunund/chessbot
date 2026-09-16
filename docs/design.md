@@ -90,7 +90,7 @@ storage that acts as a shared key-value store.
 | Motion | `chessbot_motion` | Python | IK and Cartesian paths behind MoveIt's standard services, using Pinocchio. |
 | Control | ros2_control | C++ | `joint_trajectory_controller` for the arm, `parallel_gripper_action_controller` for the gripper, `joint_state_broadcaster`. Gazebo, mock or real hardware behind the same controllers. |
 | Calibration | `chessbot_calibration` | Python | Where the board is relative to the robot. Loads YAML from disk, primes the key-value store, runs the `Calibrate` action (measurement stages are stubs). |
-| Recording | `rerun_ros_bridge` | C++ | Generic ROS 2 → Rerun bridge. Streams to the Rerun viewer over gRPC, and archives to `.rrd` when asked. No chessbot dependencies. |
+| Recording | [`rerun_ros_bridge`](https://github.com/Yadunund/rerun_ros_bridge) (external) | C++ | Generic ROS 2 → Rerun bridge in its own repository, pinned in `chessbot.repos`. Streams to the Rerun viewer over gRPC, and archives to `.rrd` when asked. |
 | UI | `chessbot_web` | JS | Plain HTML, CSS and JavaScript, no build step. three.js for the 3D view. |
 | Description | `chessbot_description` | URDF | SO-101 with overhead and wrist cameras, ros2_control tags, simulation world. |
 | Bringup | `chessbot_bringup` | XML launch | Launch files and configuration. |
@@ -214,7 +214,7 @@ No extra bridge process is involved:
 
 ## Recording and visualisation
 
-`rerun_ros_bridge` runs in the same container as the cameras, so frames reach it by pointer.
+[`rerun_ros_bridge`](https://github.com/Yadunund/rerun_ros_bridge) lives in its own repository, since nothing in it is chessbot-specific; its README describes its architecture. It runs in the same container as the cameras, so frames reach it by pointer.
 
 - It serves a gRPC stream that the stock Rerun web or native viewer connects to. The UI's
   **Debug view** button opens it in a new tab.
@@ -272,4 +272,4 @@ the thought feed; the Rerun debug view.
 | `tools/` | stack checks, reachability analysis, dev scripts |
 | `docs/` | design, interfaces, licensing |
 | `media` branch | README screenshots and GIFs, kept out of `main`'s history |
-| `chessbot.repos` | pinned external sources (SO-101 description, Stockfish) |
+| `chessbot.repos` | pinned external sources (rerun_ros_bridge, SO-101 description, Stockfish), imported into `external/` |
