@@ -1,0 +1,16 @@
+# Ask perception what is on the board right now.
+#
+# Perception is expensive and is only needed at decision points (the clock
+# button, verification after a robot move), so this is a query rather than a
+# stream.
+
+# Ignore camera frames older than this many seconds; 0 accepts the latest frame
+# whatever its age. Used after arm motion, when a stale frame would be wrong.
+float32 max_frame_age_s
+---
+uint8 RESULT_OK=0
+uint8 RESULT_NO_IMAGE=1        # no camera frame within max_frame_age_s
+uint8 RESULT_NO_BOARD=2        # frame available, board not located
+uint8 result
+
+BoardState state

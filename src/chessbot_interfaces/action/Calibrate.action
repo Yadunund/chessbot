@@ -1,0 +1,26 @@
+# Run a fresh calibration: locate the board, work out where it is relative to
+# the robot, write the result to YAML and prime the key-value store.
+#
+# Long-running (it moves the arm) so a UI can show progress and cancel it.
+
+# Calibrate even if a stored calibration is already loaded.
+bool force
+---
+uint8 RESULT_OK=0
+uint8 RESULT_NO_BOARD=1        # board never found in the camera
+uint8 RESULT_MOTION_FAILED=2   # arm could not reach the survey poses
+uint8 RESULT_SOLVE_FAILED=3    # data collected, solution did not converge
+uint8 RESULT_CANCELLED=4
+uint8 result
+
+# Where the calibration was written, when result is RESULT_OK.
+string profile_path
+---
+uint8 STAGE_LOCATING_BOARD=0
+uint8 STAGE_SURVEYING=1        # moving the arm through survey poses
+uint8 STAGE_SOLVING=2
+uint8 STAGE_VERIFYING=3
+uint8 stage
+
+# 0.0 to 1.0 through the whole run.
+float32 progress
