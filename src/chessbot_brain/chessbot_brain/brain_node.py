@@ -45,6 +45,7 @@ from chessbot_brain.board import Board, piece_colour, square_name
 from chessbot_brain.capabilities import ArmConfig, Capabilities, CapabilityError
 from chessbot_brain.engine import EngineError, UciEngine, choose_reply
 from chessbot_brain.geometry import PIECE_HEIGHTS, BoardGeometry, graveyard_cell
+from chessbot_brain.move_reading import read_move
 
 PHASE_NAMES = {
     GameState.PHASE_IDLE: "idle",
@@ -70,7 +71,7 @@ THOUGHT_NAMES = {
 BOARD_RESULT_TEXT = {
     GetBoardState.Response.RESULT_OK: "board located",
     GetBoardState.Response.RESULT_NO_IMAGE: "no recent camera frame",
-    GetBoardState.Response.RESULT_NO_BOARD: "camera frame received but no board located",
+    GetBoardState.Response.RESULT_NO_BOARD: "the board isn't located, or hasn't been seen in a known position yet",
 }
 
 
@@ -310,17 +311,16 @@ class BrainNode(Node):
                 self.think(Thought.RECOVER, "Clock pressed, but it is not your turn.")
                 return
         self.set_phase(GameState.PHASE_READING_BOARD)
-        response = self.caps.board_state()
-        self.think(Thought.PERCEIVE, f"Perception: {BOARD_RESULT_TEXT.get(response.result, 'unknown result')}.")
+        seen = self._read_move_from_camera()
 
         if move is None:
-            # TODO(chessbot): infer the move by comparing board states against legal moves.
-            self.think(
-                Thought.RECOVER,
-                "I can't work out your move from the camera yet. Pass it explicitly (e.g. e2e4).",
-            )
-            self.set_phase(GameState.PHASE_HUMAN_TURN)
-            return
+            if seen is None:
+                self.think(Thought.RECOVER, "Type your move (e.g. e2e4) and press the clock again.")
+                self.set_phase(GameState.PHASE_HUMAN_TURN)
+                return
+            move = seen
+        elif seen is not None and seen != self._legal_form(move):
+            self.think(Thought.VERIFY, f"The camera saw {seen}, but I'll go with the move you typed.")
 
         move = self._legal_form(move)
         if move is None:
@@ -335,6 +335,29 @@ class BrainNode(Node):
         if self._game_over():
             return
         self._robot_turn()
+
+    def _read_move_from_camera(self) -> str | None:
+        """The human's move as read from the overhead camera, or None (with the reason in the thought feed)."""
+        try:
+            response = self.caps.board_state(max_frame_age_s=1.0)
+        except CapabilityError as exc:
+            self.think(Thought.PERCEIVE, f"I can't read the board: {exc}.")
+            return None
+        if response.result != GetBoardState.Response.RESULT_OK:
+            self.think(Thought.PERCEIVE, f"I can't read the board: {BOARD_RESULT_TEXT.get(response.result, 'unknown result')}.")
+            return None
+        if self.engine is None:
+            self.think(Thought.PERCEIVE, "I can't read your move without the rules engine.")
+            return None
+        with self._lock:
+            board = Board(self.board.fen())
+        legal = self.engine.legal_moves(board.fen())
+        reading = read_move(board, legal, list(response.state.squares), list(response.state.confidence))
+        if reading.move is None:
+            self.think(Thought.PERCEIVE, f"I couldn't tell your move: {reading.reason}.")
+            return None
+        self.think(Thought.PERCEIVE, f"I saw {reading.move}: {reading.reason}.")
+        return reading.move
 
     def _legal_form(self, move: str) -> str | None:
         """The move as the engine spells it if legal (adding a queen promotion when omitted), else None."""

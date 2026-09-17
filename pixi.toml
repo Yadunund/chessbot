@@ -36,6 +36,9 @@ vcstool = "*"
 make = "*"
 curl = "*"
 
+# Perception: JSON parsing of the calibration profile (header-only, MIT)
+nlohmann_json = "*"
+
 # Visualization and recording: Rerun C++ SDK for the bridge, CLI for the viewer
 librerun-sdk = "0.37.*"
 rerun-sdk = "0.37.*"
