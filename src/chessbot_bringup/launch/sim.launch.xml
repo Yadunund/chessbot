@@ -7,6 +7,7 @@
 -->
 <launch>
   <arg name="container" default="robot_io" />
+  <arg name="cameras" default="true" description="Simulate the cameras (false speeds up motion tests)." />
   <arg name="rerun" default="true" description="Run the Rerun bridge." />
   <arg name="brain" default="true" description="Run the brain (game engine and orchestrator)." />
   <arg name="rerun_grpc_port" default="9876" />
@@ -19,6 +20,7 @@
 
   <include file="$(find-pkg-share chessbot_bringup)/launch/robot_sim.launch.xml">
     <arg name="container" value="$(var container)" />
+    <arg name="cameras" value="$(var cameras)" />
   </include>
 
   <!-- Perception: camera frames in, board facts out on request. -->

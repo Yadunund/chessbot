@@ -10,6 +10,8 @@
 <robot xmlns:xacro="http://wiki.ros.org/xacro" name="chessbot_so101">
   <xacro:arg name="prefix" default="" />
   <xacro:arg name="hardware" default="gazebo" />
+  <!-- Camera sensors cost most of the simulation time; motion tests turn them off. -->
+  <xacro:arg name="cameras" default="true" />
   <xacro:arg name="usb_port" default="/dev/so101" />
   <xacro:arg name="controllers_file" default="" />
   <xacro:arg name="color" default="0.2 0.7 0.85 1.0" />
@@ -44,6 +46,7 @@
     (Z forward, X right, Y down); Gazebo sensors look along +X with +Z up, so
     the sensor pose rotates pitch=-pi/2, yaw=+pi/2 to compensate.
   -->
+  <xacro:if value="$(arg cameras)">
   <gazebo reference="overhead_camera_link">
     <sensor name="overhead_camera" type="camera">
       <gz_frame_id>overhead_camera_link</gz_frame_id>
@@ -87,6 +90,7 @@
       <topic>wrist_camera/image_raw</topic>
     </sensor>
   </gazebo>
+  </xacro:if>
 
   <!-- Gripper friction so grasped pieces do not slide. -->
   <gazebo reference="$(arg prefix)jaw_link">
@@ -133,6 +137,9 @@
   <gazebo>
     <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
       <parameters>$(arg controllers_file)</parameters>
+      <!-- How hard joints are driven towards position commands. The default (0.1) is soft
+           enough that the arm sags under gravity at full reach. -->
+      <position_proportional_gain>1.0</position_proportional_gain>
     </plugin>
   </gazebo>
 </robot>

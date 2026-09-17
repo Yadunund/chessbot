@@ -36,7 +36,12 @@ def main():
     parser.add_argument("--keepout-height", type=float, default=0.042 + 0.02)
     parser.add_argument("--samples", type=int, default=20000)
     parser.add_argument("--pan", type=float, help="fix the base joint (e.g. 1.5708 to swing the arm to one side)")
-    parser.add_argument("--prefer", choices=["compact", "low"], default="compact")
+    parser.add_argument("--prefer", choices=["compact", "low", "perched"], default="perched",
+                        help="compact: tool near the base; low: lowest arm; perched: folded near the base, as low as possible, out of camera view")
+    parser.add_argument("--max-spread", type=float, default=0.12, help="perched: furthest the arm may reach from the base axis, m")
+    parser.add_argument("--camera", type=float, nargs=3, default=[0.234, 0.0, 0.51], help="overhead camera position")
+    parser.add_argument("--camera-half-fov", type=float, nargs=2, default=[0.3248, 0.5774],
+                        help="tan of half the field of view along base x and y")
     args = parser.parse_args()
 
     model, geom = load(args.urdf_url, args.share)
@@ -81,11 +86,22 @@ def main():
         if lowest < 0.02:
             continue
         reach = float(np.linalg.norm(data.oMf[tip].translation[:2]))
-        results.append((clearance, reach if args.prefer == "compact" else highest, q_arm))
+        points = np.concatenate([(gdata.oMg[i].rotation @ vertices[i].T).T + gdata.oMg[i].translation for i in moving])
+        spread = float(np.max(np.linalg.norm(points[:, :2], axis=1)))
+        if args.prefer == "perched":
+            cx, cy, cz = args.camera
+            depth = np.maximum(cz - points[:, 2], 1e-3)
+            seen = (np.abs(points[:, 0] - cx) < depth * args.camera_half_fov[0]) & (np.abs(points[:, 1] - cy) < depth * args.camera_half_fov[1])
+            if seen.any():
+                continue
+        if args.prefer == "perched" and spread > args.max_spread:
+            continue
+        score = {"compact": reach, "low": highest, "perched": highest}[args.prefer]
+        results.append((clearance, score, q_arm))
     good = [r for r in results if r[0] > 0.03]
     good.sort(key=lambda r: (r[1], -r[0]))
     print(f"{len(good)} of {len(results)} samples clear the keep-out box by more than 30 mm")
-    label = "tool reach" if args.prefer == "compact" else "highest link"
+    label = {"compact": "tool reach", "low": "highest point", "perched": "highest point"}[args.prefer]
     for clearance, score, q_arm in good[:8]:
         print(f"clearance {clearance * 1000:5.1f} mm  {label} {score * 1000:5.0f} mm  joints [{', '.join(f'{v:.2f}' for v in q_arm)}]")
 

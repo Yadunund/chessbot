@@ -16,9 +16,10 @@
   <arg name="description_file" default="$(find-pkg-share chessbot_description)/urdf/so101_sim.urdf.xacro" />
   <arg name="controllers_file" default="$(find-pkg-share chessbot_description)/config/controllers.yaml" />
   <arg name="container" default="robot_io" />
+  <arg name="cameras" default="true" description="Simulate the cameras (false speeds up motion tests)." />
 
   <let name="robot_description"
-       value="$(command 'xacro $(var description_file) hardware:=gazebo controllers_file:=$(var controllers_file)')" />
+       value="$(command 'xacro $(var description_file) hardware:=gazebo cameras:=$(var cameras) controllers_file:=$(var controllers_file)')" />
 
   <node_container pkg="rclcpp_components" exec="component_container" name="$(var container)"
                   namespace="" args="--executor-type events-cbg" output="screen" />

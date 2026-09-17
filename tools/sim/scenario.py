@@ -148,7 +148,9 @@ def analyse(before_names, poses_before, poses_after, belief_before, belief_after
         else:
             moving_models.add(name)
             # The nearest newly believed slot for this piece letter.
-            candidates = [(math.dist(end[:2], sxyz[:2]), sxyz) for sl, sxyz in new_slots if sl == letter]
+            # A promoted pawn is still a pawn in the world (swapping pieces is not implemented).
+            same = [sl for sl in new_slots if sl[0] == letter] or ([sl for sl in new_slots if sl[0].lower() in "qrbn"] if letter.lower() == "p" else [])
+            candidates = [(math.dist(end[:2], sxyz[:2]), sxyz) for _, sxyz in same]
             if not candidates:
                 if end[2] > -0.05:  # captured by the human: removed by the runner, or still on the board
                     failures.append(f"{name}: believed gone but still in the world at {end}")
@@ -176,7 +178,7 @@ def analyse(before_names, poses_before, poses_after, belief_before, belief_after
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", help="park | transfer:<src><dst> | robot:<human move> | spawn")
+    parser.add_argument("action", help="park | transfer:<src><dst> | robot:<human move> | force:<robot move> | spawn")
     parser.add_argument("--fen", help="set this believed position first")
     parser.add_argument("--robot-side", default="black")
     parser.add_argument("--still-tol", type=float, default=0.002, help="m a stationary piece may move")
@@ -206,6 +208,8 @@ def main():
     with gzsim.Recorder(contact_topics) as recorder:
         if kind == "park":
             http("POST", "/api/park")
+        elif kind == "force":
+            http("POST", "/api/dev/robot_move", {"move": arg})
         elif kind == "transfer":
             http("POST", "/api/demo_transfer", {"src": arg[:2], "dst": arg[2:4]})
         elif kind == "robot":

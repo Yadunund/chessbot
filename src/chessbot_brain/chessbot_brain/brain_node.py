@@ -366,10 +366,23 @@ class BrainNode(Node):
         self.set_phase(GameState.PHASE_GAME_OVER)
         return True
 
-    def _robot_turn(self):
+    def job_robot_move(self, move: str):
+        """Dev: the robot plays this move instead of the engine's (to test castling, en passant...)."""
+        with self._lock:
+            robot_to_move = self.side_to_move() == self.robot_side
+        legal = self._legal_form(move) if robot_to_move else None
+        if legal is None:
+            self.think(Thought.RECOVER, f"Dev: {move} is not a legal robot move here.")
+            return
+        self._robot_turn(forced=legal)
+
+    def _robot_turn(self, forced: str | None = None):
         self._switch_clock(self.robot_side)
         self.set_phase(GameState.PHASE_THINKING)
-        if self.engine is not None:
+        if forced is not None:
+            reply = forced
+            self.think(Thought.DECIDE, f"Dev: playing {reply} as instructed.")
+        elif self.engine is not None:
             reply = self.engine.best_move(self.board.fen(), self.engine_movetime_ms, self.engine_elo)
             strength = f"Elo {self.engine_elo}" if self.engine_elo else "full strength"
             self.think(Thought.DECIDE, f"I'll play {reply} (Stockfish, {strength}, {self.engine_movetime_ms} ms).")
@@ -464,6 +477,10 @@ class PressClock(BaseModel):
     move: str | None = None
 
 
+class RobotMove(BaseModel):
+    move: str
+
+
 class SetPosition(BaseModel):
     fen: str
     robot_side: str = "black"
@@ -518,6 +535,10 @@ def build_app(node: BrainNode) -> FastAPI:
         if body.robot_side not in ("white", "black"):
             raise HTTPException(status_code=422, detail="robot_side must be white or black")
         return submit("set_position", node.job_set_position, body.fen, body.robot_side)
+
+    @app.post("/api/dev/robot_move")
+    def robot_move(body: RobotMove):
+        return submit("robot_move", node.job_robot_move, body.move)
 
     @app.post("/api/demo_transfer")
     def demo_transfer(body: DemoTransfer):

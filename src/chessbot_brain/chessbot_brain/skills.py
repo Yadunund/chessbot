@@ -17,9 +17,10 @@ from chessbot_brain.capabilities import Capabilities, CapabilityError, tool_down
 from chessbot_brain.geometry import PIECE_HEIGHTS, BoardGeometry, jaw_clearances
 
 # Heights of the grasp point above the playing surface, metres. Every piece is gripped at
-# GRASP_HEIGHT, so its base hangs that far below the grasp point; placing releases it
+# GRASP_HEIGHT (high enough that a tilted tool at the far rank keeps its heel off the
+# board), so its base hangs that far below the grasp point; placing releases it
 # PLACE_DROP higher, so a piece that slipped in the jaws is never pushed into the board.
-GRASP_HEIGHT = 0.015
+GRASP_HEIGHT = 0.018
 PLACE_DROP = 0.003
 # Hover heights tried in order. The highest clears every piece, but close to the
 # robot's base it is out of reach, so the arm hovers lower there.

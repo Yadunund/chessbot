@@ -104,6 +104,8 @@ router = { cmd = "bash -c 'exec zenohd -c config/zenoh/router.json5 --plugin-sea
 sim = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup sim.launch.xml \"$@\"' --" }
 # Regenerate the Rerun layout (src/chessbot_bringup/config/chessbot.rbl) after editing its script.
 rerun-blueprint = { cmd = "python src/chessbot_bringup/rerun/make_blueprint.py" }
+# Motion scenarios in simulation (start with: pixi run sim cameras:=false viewer:=none).
+sim-test = { cmd = "bash -c 'source install/setup.bash && exec python tools/sim/suite.py \"$@\"' --" }
 check = { cmd = "bash -c 'source install/setup.bash && exec python tools/check_stack.py \"$@\"' --" }
 
 [target.osx-arm64.tasks]

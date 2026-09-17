@@ -31,7 +31,7 @@ arm_controller:
     # so the gripper never acts while the arm is still settling.
     constraints:
       stopped_velocity_tolerance: 0.02
-      goal_time: 2.0
+      goal_time: 3.0
       shoulder_pan_joint: {goal: 0.01}
       shoulder_lift_joint: {goal: 0.01}
       elbow_flex_joint: {goal: 0.01}
