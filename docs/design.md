@@ -86,7 +86,8 @@ storage that acts as a shared key-value store.
 | Component | Package | Language | Role |
 |---|---|---|---|
 | Brain | `chessbot_brain` | Python | Owns the game: position, moves, clocks, phase. Composes capabilities into skills. Publishes game state and a readable thought feed. Serves the REST API and the UI. |
-| Perception | `chessbot_perception` | C++ | Turns camera frames into board facts (`GetBoardState`), only when asked. Board detection is not implemented yet. |
+| Perception | `chessbot_perception` | C++ | Turns overhead camera frames into board facts (`GetBoardState`: empty / white / black per square), only when asked. |
+| Reasoning | `chessbot_inference` | Python | Serves the `Reason` service from Gemma 4 in `llama-server`, on this host or another. Advises; never decides. |
 | Motion | `chessbot_motion` | Python | IK and Cartesian paths behind MoveIt's standard services, using Pinocchio. |
 | Control | ros2_control | C++ | `joint_trajectory_controller` for the arm, `parallel_gripper_action_controller` for the gripper, `joint_state_broadcaster`. Gazebo, mock or real hardware behind the same controllers. |
 | Calibration | `chessbot_calibration` | Python | Where the board is relative to the robot. Loads YAML from disk, primes the key-value store, runs the `Calibrate` action (measurement stages are stubs). |
@@ -140,7 +141,8 @@ sequenceDiagram
   Brain-->>UI: game state and thoughts (via router SSE)
 ```
 
-Until camera move detection exists, the clock press carries the human's move explicitly.
+The human's move is read from the camera (see [Reading the human's move](#reading-the-humans-move)); a typed
+move is used only when the camera can't tell.
 
 ### Skills
 
@@ -182,6 +184,34 @@ the real IK.
   previous point.
 - Both are served through `moveit_msgs` services, so MoveIt could replace this node without
   changing the brain.
+
+## Reading the human's move
+
+1. **Where squares are:** perception projects a small patch just above each square centre into the overhead
+   image, using what is already known: the board pose from the key-value store, the camera model from
+   `camera_info` and the camera pose from TF. Nothing is detected in the image.
+2. **What they look like:** whenever the human's turn begins (the robot has finished and parked, or a new
+   game has started), the believed position can be trusted, so perception records each square's colour
+   with its believed label, per square and pooled over light and dark squares.
+3. **On the clock press:** the brain calls `GetBoardState`. Each square is classified by colour distance to
+   those references, with a confidence.
+4. **Which move:** the brain compares the observed occupancy with the occupancy each legal move would leave,
+   weighted by confidence, and accepts the best only if it fits well and clearly beats the next.
+5. **When it can't tell:** Gemma looks at the camera image and picks among the candidate moves (or says
+   it's unclear); its answer is used only when it is confident. Otherwise the player types the move.
+
+## Reasoning
+
+Gemma 4 E4B (Apache-2.0, vision) runs in `llama-server` (llama.cpp) on the GPU machine
+(`pixi run -e llm llm`). `chessbot_inference` serves `Reason` from it; any host can run either.
+Deterministic components keep authority: the model advises, the caller decides, and without a model
+server everything still works.
+
+| Role | When | Output |
+|---|---|---|
+| Commentary | after each robot move, in the background | a sentence or two in the thought feed, marked model-generated, grounded in the moves played |
+| Move tiebreak | the camera reading is ambiguous | one of the legal candidates or "unclear" (JSON schema), used only when confident |
+| Explain | (next) an illegal or odd move | a friendly sentence built from rules-engine facts |
 
 ## Seeing the robot's belief
 
@@ -275,6 +305,13 @@ Grasping follows from the gripper's measured geometry (`tools/dev/gripper_geomet
 
 Poses follow these fixed rules today. Because the belief is already turned into piece cylinders,
 publishing them as a planning scene for collision-aware planning is a small step later.
+
+## Real hardware
+
+`real.launch.xml` brings up the same application (`app.launch.xml`) on the real SO-101:
+`ros2_control` with `feetech_ros2_driver`, and `usb_cam` components for the overhead and wrist cameras in
+the io container, so frames still reach perception and the Rerun bridge by pointer. `hardware:=mock` runs
+the whole stack without the arm. Setup: [hardware.md](hardware.md).
 
 ## Deployment and compute
 

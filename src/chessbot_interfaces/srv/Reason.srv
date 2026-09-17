@@ -1,0 +1,32 @@
+# Ask the reasoning model (Gemma) a question, with optional images.
+#
+# Served by chessbot_inference, which may run on any host. The model advises; the
+# caller decides. When json_schema is set, the answer is constrained to it.
+
+uint8 ROLE_COMMENTARY=0      # explain a move in a sentence or two, from facts in the prompt
+uint8 ROLE_MOVE_TIEBREAK=1   # pick which candidate move was played, from an image
+uint8 ROLE_EXPLAIN=2         # phrase facts (e.g. why a move is illegal) for the player
+
+# Which question this is: for routing, logging and choosing sampling settings.
+uint8 role
+
+# The question, with every fact the model needs.
+string prompt
+
+# Images for the question (JPEG or PNG), e.g. the overhead camera frame.
+sensor_msgs/CompressedImage[] images
+
+# Optional JSON Schema the answer must follow; empty for free text.
+string json_schema
+---
+uint8 RESULT_OK=0
+uint8 RESULT_UNAVAILABLE=1   # no model server reachable
+uint8 RESULT_FAILED=2        # the model server returned an error
+uint8 result
+
+# The answer: free text, or JSON matching json_schema.
+string text
+
+# Which model answered, and how long it took.
+string model
+float32 latency_s

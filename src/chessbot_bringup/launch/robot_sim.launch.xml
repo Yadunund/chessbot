@@ -13,7 +13,7 @@
 -->
 <launch>
   <arg name="world" default="$(find-pkg-share chessbot_description)/worlds/chessbot.sdf" />
-  <arg name="description_file" default="$(find-pkg-share chessbot_description)/urdf/so101_sim.urdf.xacro" />
+  <arg name="description_file" default="$(find-pkg-share chessbot_description)/urdf/so101.urdf.xacro" />
   <arg name="controllers_file" default="$(find-pkg-share chessbot_description)/config/controllers.yaml" />
   <arg name="container" default="robot_io" />
   <arg name="cameras" default="true" description="Simulate the cameras (false speeds up motion tests)." />

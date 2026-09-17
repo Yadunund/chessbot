@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<!--
+  The chessbot application on top of a running robot (simulated or real): perception,
+  the Rerun bridge and viewer, motion, reasoning, calibration and the brain.
+
+  Included by sim.launch.xml and real.launch.xml, which bring up the robot half.
+  Perception and the Rerun bridge load into the robot's io container, next to the cameras.
+-->
+<launch>
+  <arg name="container" default="robot_io" />
+  <arg name="use_sim_time" default="false" />
+  <arg name="rerun" default="true" description="Run the Rerun bridge." />
+  <arg name="brain" default="true" description="Run the brain (game engine and orchestrator)." />
+  <arg name="rerun_grpc_port" default="9876" />
+  <arg name="viewer" default="web" description="Rerun viewer: web (on web_viewer_port), native, or none." />
+  <arg name="web_viewer_port" default="9090" />
+  <arg name="record" default="false" description="Also archive the Rerun stream to an .rrd file in recording_dir." />
+  <arg name="recording_dir" default="$(env HOME)/chessbot_recordings" />
+  <arg name="rest_port" default="8000" />
+  <arg name="calibration_file" default="$(env HOME)/.chessbot/calibration.yaml" />
+  <arg name="llm_url" default="http://127.0.0.1:8081" description="llama-server serving the reasoning model (pixi run llm)." />
+
+  <!-- Perception: camera frames in, board facts out on request. -->
+  <load_composable_node target="$(var container)">
+    <composable_node pkg="chessbot_perception" plugin="chessbot_perception::BoardMonitor" name="board_monitor">
+      <param name="image_topic" value="/overhead_camera/image_raw" />
+      <param name="use_sim_time" value="$(var use_sim_time)" />
+      <extra_arg name="use_intra_process_comms" value="true" />
+    </composable_node>
+  </load_composable_node>
+
+  <!-- Rerun bridge: ROS topics to the viewer and to an .rrd archive. -->
+  <group if="$(var rerun)">
+    <load_composable_node target="$(var container)">
+      <composable_node pkg="rerun_ros_bridge" plugin="rerun_ros_bridge::RerunBridge" name="rerun_bridge">
+        <param from="$(find-pkg-share chessbot_bringup)/config/rerun_bridge.yaml" />
+        <param name="blueprint_file" value="$(find-pkg-share chessbot_bringup)/config/chessbot.rbl" />
+        <param name="grpc_port" value="$(var rerun_grpc_port)" />
+        <param name="save_rrd" value="$(var record)" />
+        <param name="recording_dir" value="$(var recording_dir)" />
+        <param name="use_sim_time" value="$(var use_sim_time)" />
+        <extra_arg name="use_intra_process_comms" value="true" />
+      </composable_node>
+    </load_composable_node>
+    <include file="$(find-pkg-share rerun_ros_bridge)/launch/viewer.launch.xml">
+      <arg name="viewer" value="$(var viewer)" />
+      <arg name="grpc_url" value="rerun+http://127.0.0.1:$(var rerun_grpc_port)/proxy" />
+      <arg name="web_viewer_port" value="$(var web_viewer_port)" />
+    </include>
+  </group>
+
+  <!-- Motion: Cartesian planning and IK over the robot description. -->
+  <node pkg="chessbot_motion" exec="motion_node" name="motion" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)" />
+  </node>
+
+  <!-- Reasoning: Gemma behind the Reason service. Without a model server it answers "unavailable". -->
+  <node pkg="chessbot_inference" exec="inference_node" name="inference" output="screen">
+    <param name="server_url" value="$(var llm_url)" />
+    <param name="use_sim_time" value="$(var use_sim_time)" />
+  </node>
+
+  <!-- Calibration: owns the YAML profile and primes the key-value store. -->
+  <node pkg="chessbot_calibration" exec="calibration_node" name="calibration" output="screen">
+    <param name="profile_path" value="$(var calibration_file)" />
+    <param name="use_sim_time" value="$(var use_sim_time)" />
+  </node>
+
+  <!-- Brain: game engine, orchestrator and the REST API the UI calls. -->
+  <group if="$(var brain)">
+    <node pkg="chessbot_brain" exec="brain_node" name="brain" output="screen">
+      <param name="use_sim_time" value="$(var use_sim_time)" />
+      <param name="rest_port" value="$(var rest_port)" />
+      <param name="web_root" value="$(find-pkg-share chessbot_web)/web" />
+    </node>
+  </group>
+</launch>

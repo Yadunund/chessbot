@@ -36,6 +36,13 @@ vcstool = "*"
 make = "*"
 curl = "*"
 
+# Real SO-101: build dependencies of feetech_ros2_driver
+cpp-expected = ">=1.1.0,<2"
+range-v3 = ">=0.12.0,<0.13"
+libserial = "*"
+pkg-config = "*"
+ros-lyrical-pluginlib = "*"
+
 # Perception: JSON parsing of the calibration profile (header-only, MIT)
 nlohmann_json = "*"
 
@@ -83,8 +90,23 @@ eclipse-zenoh = "==1.9.0"
 pytest = "*"
 ruff = "*"
 
+# Reasoning model server (llama.cpp), in its own environment: CUDA build on linux-64.
+[feature.llm.system-requirements]
+cuda = "13"
+
+[feature.llm.dependencies]
+"llama.cpp" = "*"
+
+[feature.llm.target.linux-64.dependencies]
+"llama.cpp" = { version = "*", build = "cuda*" }
+
+[feature.llm.tasks]
+# Gemma 4 E4B (Apache-2.0) with vision, downloaded from Hugging Face on first run.
+llm = { cmd = "llama-server -hf ggml-org/gemma-4-E4B-it-GGUF:Q4_0 --host 0.0.0.0 --port 8081 -ngl 99 -c 8192 --jinja" }
+
 [environments]
 dev = ["dev"]
+llm = { features = ["llm"], no-default-feature = true }
 
 [activation.env]
 CMAKE_PREFIX_PATH = "${CONDA_PREFIX}"
@@ -104,6 +126,7 @@ stockfish = { cmd = "make -C external/Stockfish/src -j build ARCH=native COMP=gc
 
 # Run
 router = { cmd = "bash -c 'exec zenohd -c config/zenoh/router.json5 --plugin-search-dir \"$CONDA_PREFIX/lib\"'" }
+real = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup real.launch.xml \"$@\"' --" }
 sim = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup sim.launch.xml \"$@\"' --" }
 # Regenerate the Rerun layout (src/chessbot_bringup/config/chessbot.rbl) after editing its script.
 rerun-blueprint = { cmd = "python src/chessbot_bringup/rerun/make_blueprint.py" }
@@ -111,7 +134,16 @@ rerun-blueprint = { cmd = "python src/chessbot_bringup/rerun/make_blueprint.py" 
 sim-test = { cmd = "bash -c 'source install/setup.bash && exec python tools/sim/suite.py \"$@\"' --" }
 check = { cmd = "bash -c 'source install/setup.bash && exec python tools/check_stack.py \"$@\"' --" }
 
+# USB cameras (V4L2) exist on Linux only.
+[target.linux-64.dependencies]
+ros-lyrical-usb-cam = "*"
+
+[target.linux-aarch64.dependencies]
+ros-lyrical-usb-cam = "*"
+
 [target.osx-arm64.tasks]
+# feetech_ros2_driver does not build on macOS (libserial); run the real stack from Linux.
+build = { cmd = "colcon build --symlink-install --base-paths src external --packages-skip feetech_ros2_driver", depends-on = ["import-deps"] }
 stockfish = { cmd = "make -C external/Stockfish/src -j build ARCH=native COMP=clang && mkdir -p generated/bin && cp external/Stockfish/src/stockfish generated/bin/", depends-on = ["import-deps"] }
 
 [feature.dev.tasks]

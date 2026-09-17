@@ -30,7 +30,7 @@ parser.add_argument("--critical", action="store_true", help="only the corner and
 args = parser.parse_args()
 
 urdf = subprocess.run(
-    ["xacro", get_package_share_directory("chessbot_description") + "/urdf/so101_sim.urdf.xacro"],
+    ["xacro", get_package_share_directory("chessbot_description") + "/urdf/so101.urdf.xacro"],
     check=True, capture_output=True, text=True,
 ).stdout
 kin = ArmKinematics(urdf, JOINTS, "gripper_frame_link", "gripper_link", max_approach_tilt_rad=math.radians(args.max_tilt_deg))

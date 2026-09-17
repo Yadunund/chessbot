@@ -22,7 +22,7 @@ def kin():
     except Exception:
         pytest.skip("chessbot_description not installed")
     urdf = subprocess.run(
-        ["xacro", os.path.join(share, "urdf", "so101_sim.urdf.xacro")], check=True, capture_output=True, text=True
+        ["xacro", os.path.join(share, "urdf", "so101.urdf.xacro")], check=True, capture_output=True, text=True
     ).stdout
     return ArmKinematics(urdf, JOINTS, "gripper_frame_link", "gripper_link")
 

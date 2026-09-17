@@ -1,0 +1,17 @@
+# udev rules giving the SO-101 and the cameras stable names, whatever the USB order.
+# Adapted from ros-physical-ai/demos pai_bringup/config/hardware (Apache-2.0).
+#
+#   /dev/so101         the arm's servo bus adapter
+#   /dev/cam_overhead  overhead camera
+#   /dev/cam_wrist     wrist camera
+#
+# 1. Find the values:
+#      udevadm info --query=property --name=/dev/ttyACM0 | egrep 'ID_VENDOR_ID|ID_MODEL_ID|ID_SERIAL_SHORT'
+#      udevadm info --name=/dev/video0 --query=all | egrep 'ID_PATH='
+# 2. Replace the <...> placeholders, copy to /etc/udev/rules.d/99-chessbot.rules, then
+#      sudo udevadm control --reload-rules && sudo udevadm trigger
+# Cameras are matched by USB port (ID_PATH), so keep each plugged into the same port.
+
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="<ARM_ID_VENDOR_ID>", ENV{ID_MODEL_ID}=="<ARM_ID_MODEL_ID>", ENV{ID_SERIAL_SHORT}=="<ARM_ID_SERIAL_SHORT>", SYMLINK+="so101", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="video4linux", ATTR{index}=="0", ENV{ID_PATH}=="<OVERHEAD_ID_PATH>", SYMLINK+="cam_overhead", MODE="0660", GROUP="video"
+SUBSYSTEM=="video4linux", ATTR{index}=="0", ENV{ID_PATH}=="<WRIST_ID_PATH>", SYMLINK+="cam_wrist", MODE="0660", GROUP="video"

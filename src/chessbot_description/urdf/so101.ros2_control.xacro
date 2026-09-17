@@ -8,7 +8,7 @@
   Adapted from ros-physical-ai/demos (Apache-2.0).
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <xacro:macro name="chessbot_ros2_control" params="prefix hardware usb_port:='/dev/so101'">
+  <xacro:macro name="chessbot_ros2_control" params="prefix hardware usb_port:='/dev/so101' joint_config_file:=''">
     <ros2_control name="SO_ARM101" type="system">
       <hardware>
         <xacro:if value="${hardware == 'gazebo'}">
@@ -20,13 +20,16 @@
         <xacro:if value="${hardware == 'real'}">
           <plugin>feetech_ros2_driver/FeetechHardwareInterface</plugin>
           <param name="usb_port">${usb_port}</param>
+          <param name="joint_config_file">${joint_config_file}</param>
         </xacro:if>
       </hardware>
 
-      <!-- PID gains are read by gz_ros2_control only. -->
-      <xacro:macro name="arm_joint" params="name initial_position:=0.0">
+      <!-- id and p_coefficient configure the Feetech servos; PID gains are read by gz_ros2_control only. -->
+      <xacro:macro name="arm_joint" params="name id p_coefficient:=16 initial_position:=0.0">
         <joint name="${name}">
           <param name="initial_position">${initial_position}</param>
+          <param name="id">${id}</param>
+          <param name="p_coefficient">${p_coefficient}</param>
           <command_interface name="position">
             <param name="p">100.0</param>
             <param name="i">0.1</param>
@@ -37,12 +40,12 @@
         </joint>
       </xacro:macro>
 
-      <xacro:arm_joint name="${prefix}shoulder_pan_joint" />
-      <xacro:arm_joint name="${prefix}shoulder_lift_joint" />
-      <xacro:arm_joint name="${prefix}elbow_flex_joint" />
-      <xacro:arm_joint name="${prefix}wrist_flex_joint" />
-      <xacro:arm_joint name="${prefix}wrist_roll_joint" />
-      <xacro:arm_joint name="${prefix}gripper_joint" />
+      <xacro:arm_joint name="${prefix}shoulder_pan_joint" id="1" p_coefficient="8" />
+      <xacro:arm_joint name="${prefix}shoulder_lift_joint" id="2" />
+      <xacro:arm_joint name="${prefix}elbow_flex_joint" id="3" />
+      <xacro:arm_joint name="${prefix}wrist_flex_joint" id="4" />
+      <xacro:arm_joint name="${prefix}wrist_roll_joint" id="5" />
+      <xacro:arm_joint name="${prefix}gripper_joint" id="6" />
     </ros2_control>
   </xacro:macro>
 </robot>

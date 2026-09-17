@@ -45,6 +45,16 @@ rclcpp_components_register_node(board_monitor_component
   EXECUTABLE board_monitor
 )
 
+# ROS message packages export their Python bindings as link dependencies, which reference
+# Python symbols a C++ binary cannot resolve. Drop the libraries nothing here uses.
+foreach(target board_monitor_component board_monitor)
+  if(APPLE)
+    target_link_options(${target} PRIVATE -Wl,-dead_strip_dylibs)
+  else()
+    target_link_options(${target} PRIVATE -Wl,--as-needed)
+  endif()
+endforeach()
+
 install(TARGETS square_classifier board_monitor_component
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib

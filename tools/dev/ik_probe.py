@@ -17,7 +17,7 @@ target = np.array([float(v) for v in sys.argv[1:4]])
 down = np.array([0.0, 0.0, -1.0])
 
 urdf = subprocess.run(
-    ["xacro", get_package_share_directory("chessbot_description") + "/urdf/so101_sim.urdf.xacro"],
+    ["xacro", get_package_share_directory("chessbot_description") + "/urdf/so101.urdf.xacro"],
     check=True, capture_output=True, text=True,
 ).stdout
 kin = ArmKinematics(urdf, JOINTS, "gripper_frame_link", "gripper_link")

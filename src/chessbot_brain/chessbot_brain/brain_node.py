@@ -18,6 +18,7 @@ move from perception. Until then the move is passed explicitly to
 from __future__ import annotations
 
 import collections
+import json
 import os
 import threading
 import time
@@ -28,7 +29,7 @@ import uvicorn
 from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from builtin_interfaces.msg import Time
 from chessbot_interfaces.msg import GameState, Thought
-from chessbot_interfaces.srv import GetBoardState
+from chessbot_interfaces.srv import GetBoardState, Reason
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -126,6 +127,8 @@ class BrainNode(Node):
 
         self._lock = threading.RLock()
         self._jobs = ThreadPoolExecutor(max_workers=1)
+        # Commentary runs beside the game, so a slow model never holds up play.
+        self._commentary = ThreadPoolExecutor(max_workers=1)
         self._busy = threading.Lock()
         self.thoughts: collections.deque = collections.deque(maxlen=200)
         self.last_error = ""
@@ -353,11 +356,67 @@ class BrainNode(Node):
             board = Board(self.board.fen())
         legal = self.engine.legal_moves(board.fen())
         reading = read_move(board, legal, list(response.state.squares), list(response.state.confidence))
+        if reading.move is None and len(reading.candidates) >= 2 and reading.changed:
+            self.think(Thought.PERCEIVE, f"I couldn't tell your move ({reading.reason}); asking Gemma to look.")
+            choice = self._tiebreak(board, [move for move, _ in reading.candidates])
+            if choice is not None:
+                return choice
         if reading.move is None:
             self.think(Thought.PERCEIVE, f"I couldn't tell your move: {reading.reason}.")
             return None
         self.think(Thought.PERCEIVE, f"I saw {reading.move}: {reading.reason}.")
         return reading.move
+
+    def _tiebreak(self, board: Board, candidates: list[str]) -> str | None:
+        """Gemma picks which candidate move the image shows; accepted only when it is confident."""
+        frame = self.caps.camera_frame()
+        if frame is None:
+            self.think(Thought.PERCEIVE, "No camera frame to show Gemma.")
+            return None
+        schema = {
+            "type": "object",
+            "properties": {"move": {"enum": [*candidates, "unclear"]}, "confidence": {"type": "number"}},
+            "required": ["move", "confidence"],
+        }
+        prompt = (
+            f"The image is the overhead camera view of a chess board. Before the human's move the position was "
+            f"(FEN) {board.fen()}. {'White' if board.white_to_move else 'Black'} just moved. Which of these moves "
+            f"(UCI notation) does the image show: {', '.join(candidates)}? Answer 'unclear' if you cannot tell."
+        )
+        try:
+            answer = self.caps.reason(Reason.Request.ROLE_MOVE_TIEBREAK, prompt, [frame], json.dumps(schema))
+        except CapabilityError:
+            answer = None
+        if answer is None:
+            self.think(Thought.PERCEIVE, "Gemma isn't available to look.")
+            return None
+        try:
+            parsed = json.loads(answer.text)
+        except json.JSONDecodeError:
+            self.think(Thought.PERCEIVE, f"Gemma's answer wasn't readable: {answer.text[:80]!r}.")
+            return None
+        move, confidence = parsed.get("move"), float(parsed.get("confidence", 0.0))
+        if move in candidates and confidence >= 0.7:
+            self.think(Thought.PERCEIVE, f"Gemma says you played {move} (confidence {confidence:.2f}).", model_generated=True)
+            return move
+        self.think(Thought.PERCEIVE, f"Gemma couldn't tell either ({move}, confidence {confidence:.2f}).", model_generated=True)
+        return None
+
+    def _comment_on(self, fen_before: str, human_move: str | None, reply: str):
+        """A sentence or two explaining the robot's move, in the thought feed. Runs in the background."""
+        side = "White" if Board(fen_before).white_to_move else "Black"
+        prompt = (
+            f"You play {side} in a chess game against a human. Position before your move (FEN): {fen_before}. "
+            + (f"The human's last move was {human_move}. " if human_move else "")
+            + f"You played {reply} (chosen by Stockfish). In one or two short sentences, speaking as the robot, "
+            "say what your move does. Don't claim evaluations or lines you weren't given."
+        )
+        try:
+            answer = self.caps.reason(Reason.Request.ROLE_COMMENTARY, prompt)
+        except CapabilityError:
+            return
+        if answer is not None and answer.text:
+            self.think(Thought.EXPLAIN, answer.text, model_generated=True)
 
     def _legal_form(self, move: str) -> str | None:
         """The move as the engine spells it if legal (adding a queen promotion when omitted), else None."""
@@ -427,9 +486,12 @@ class BrainNode(Node):
             self.believed_pieces(geometry),
         )
         with self._lock:
+            fen_before = self.board.fen()
+            human_move = self.moves[-1] if self.moves else None
             self.board.apply(reply)
             self.moves.append(reply)
         self.publish_state()
+        self._commentary.submit(self._comment_on, fen_before, human_move, reply)
 
         self.set_phase(GameState.PHASE_VERIFYING)
         skills.park(self.caps, self.park_joints, self.geometry_if_calibrated())

@@ -1,9 +1,11 @@
 <?xml version="1.0" ?>
 <!--
-  SO-101 for chessbot, in simulation.
+  SO-101 for chessbot, in simulation (hardware:=gazebo) or for real (hardware:=real,
+  or mock for a dry run without the arm).
 
-  Reuses the upstream so_arm101_description macro, adds the chessbot cameras,
-  the Gazebo camera sensors, and the gz_ros2_control plugin.
+  Reuses the upstream so_arm101_description macro, adds the chessbot cameras and the
+  ros2_control description. With Gazebo it also adds the simulated camera and contact
+  sensors and the gz_ros2_control plugin.
 
   Adapted from ros-physical-ai/demos pai_bringup/urdf/so_arm_gz.urdf.xacro (Apache-2.0).
 -->
@@ -14,6 +16,8 @@
   <xacro:arg name="cameras" default="true" />
   <xacro:arg name="usb_port" default="/dev/so101" />
   <xacro:arg name="controllers_file" default="" />
+  <!-- Real hardware: servo calibration (homing offsets, ranges); see config/hardware. -->
+  <xacro:arg name="joint_config_file" default="" />
   <xacro:arg name="color" default="0.2 0.7 0.85 1.0" />
   <xacro:arg name="overhead_xyz" default="0.234 0.0 0.51" />
   <xacro:arg name="overhead_rpy" default="3.14159 0.0 -1.5708" />
@@ -31,7 +35,10 @@
                           overhead_rpy="$(arg overhead_rpy)"
                           include_inertia="true" />
 
-  <xacro:chessbot_ros2_control prefix="$(arg prefix)" hardware="$(arg hardware)" usb_port="$(arg usb_port)" />
+  <xacro:chessbot_ros2_control prefix="$(arg prefix)" hardware="$(arg hardware)" usb_port="$(arg usb_port)"
+                               joint_config_file="$(arg joint_config_file)" />
+
+  <xacro:if value="${'$(arg hardware)' == 'gazebo'}">
 
   <!-- Fixed camera joints would otherwise be collapsed by the URDF to SDF conversion. -->
   <gazebo reference="overhead_camera_joint">
@@ -142,4 +149,5 @@
       <position_proportional_gain>1.0</position_proportional_gain>
     </plugin>
   </gazebo>
+  </xacro:if>
 </robot>

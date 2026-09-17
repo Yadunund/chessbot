@@ -1,0 +1,12 @@
+# Wrist USB camera (usb_cam). Device /dev/cam_wrist comes from the udev rules.
+/**:
+  ros__parameters:
+    video_device: "/dev/cam_wrist"
+    frame_id: "wrist_camera_link"
+    camera_name: "wrist_camera"
+    image_width: 640
+    image_height: 480
+    framerate: 15.0
+    pixel_format: "mjpeg2rgb"
+    io_method: "mmap"
+    autofocus: false

@@ -16,10 +16,12 @@
   strength you pick and checks yours are legal.
 - **See what the robot believes.** The UI draws the board, the pieces and the arm in 3D, with the arm
   moving live as the robot moves. Switch to top down or a flat 2D board at any time.
-- **A clock you actually press.** When you've moved, hit the big clock button. Player strips show who
-  plays which colour, whose turn it is, and what the robot is doing.
+- **A clock you actually press.** When you've moved, hit the big clock button: the robot reads your move
+  with its overhead camera. Player strips show who plays which colour, whose turn it is, and what the
+  robot is doing.
 - **Hear it think.** A running thought feed narrates each step: reading the board, choosing a move,
-  planning the grasp, moving, checking.
+  planning the grasp, moving, checking. Gemma, running locally, comments on the robot's moves and
+  helps when the camera can't tell what you played.
 - **Look under the hood.** One click opens a Rerun debug view with camera feeds, joint trajectories and
   game state on a shared timeline. Recording to disk is one flag away.
 - **Runs in simulation.** The whole stack plays full games in Gazebo with the same interfaces as the
@@ -48,8 +50,11 @@ pixi run build          # fetch pinned sources and build the workspace
 pixi run stockfish      # build the Stockfish engine
 
 pixi run router         # terminal 1: message router
-pixi run sim            # terminal 2: simulated robot, every chessbot component, Rerun viewer on :9090
+pixi run -e llm llm     # terminal 2 (optional): Gemma 4 reasoning model on the GPU
+pixi run sim            # terminal 3: simulated robot, every chessbot component, Rerun viewer on :9090
 ```
+
+On the real SO-101, run `pixi run real` instead of `pixi run sim` (see [hardware setup](docs/hardware.md)).
 
 Open **`http://<host>:8000`**, choose your colour and strength, and press **New game**.
 
@@ -64,22 +69,18 @@ Open **`http://<host>:8000`**, choose your colour and strength, and press **New 
 ## Playing
 
 1. **New game.** Pick a colour and a strength. The robot sets its clock and, if it plays white, moves first.
-2. **Your move.** Move a piece on the board, type the move (for example `e2e4`), and press the clock.
-   Typing the move is temporary, until the robot reads the board with its camera.
+2. **Your move.** Move a piece on the board and press the clock. The robot reads the move from its camera;
+   if it can't tell, it asks you to type it (for example `e2e4`).
 3. **The robot's move.** It checks your move is legal, chooses a reply, and moves the piece, putting
    captured pieces beside the board. Follow along in the 3D view and the thought feed.
 4. **If something goes wrong**, it stops and asks for help. Fix the board and press **Resume**.
 
 ## Status
 
-Complete games work in simulation. Still to come:
-
-- reading your move from the camera
-- a board and pieces in simulation
-- measuring the board's position automatically
-- promotion piece swaps
-- vision-language reasoning
-- running on the real SO-101
+The whole application runs in simulation: the robot reads your move from the camera, replies, moves the
+pieces and comments with Gemma. The real-robot stack (`pixi run real`) comes up end to end and is ready
+for the arm. Next up is refining it: motion tuning on hardware, move-reading accuracy, measuring the
+board's position automatically, and promotion piece swaps.
 
 ## Learn more
 

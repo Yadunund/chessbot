@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import json
 import math
+import struct
 import threading
+import zlib
 from dataclasses import dataclass
 
 import zenoh
 from chessbot_interfaces.action import Calibrate
-from chessbot_interfaces.srv import GetBoardState
+from chessbot_interfaces.srv import GetBoardState, Reason
 from control_msgs.action import FollowJointTrajectory, ParallelGripperCommand
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.msg import MoveItErrorCodes
@@ -26,6 +28,9 @@ from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
+from rclpy.qos import qos_profile_sensor_data
+from rclpy.wait_for_message import wait_for_message
+from sensor_msgs.msg import CompressedImage, Image
 from tf2_ros import Buffer, TransformException, TransformListener
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -45,6 +50,27 @@ def tool_down(yaw: float) -> tuple[float, float, float, float]:
 
 class CapabilityError(RuntimeError):
     """A capability call failed; the message says which and why."""
+
+
+def encode_png(data: bytes, width: int, height: int, step: int, bgr: bool, scale: int = 1) -> bytes:
+    """RGB PNG from packed rows (every `scale`-th pixel), without an image library."""
+    rows = []
+    for y in range(0, height, scale):
+        row = data[y * step: y * step + width * 3]
+        pixels = bytearray(row[0::1])
+        if scale > 1:
+            pixels = bytearray(b"".join(row[x * 3: x * 3 + 3] for x in range(0, width, scale)))
+        if bgr:
+            pixels[0::3], pixels[2::3] = pixels[2::3], pixels[0::3]
+        rows.append(b"\x00" + bytes(pixels))
+    out_w = (width + scale - 1) // scale
+    out_h = len(rows)
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", out_w, out_h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows), 6)) + chunk(b"IEND", b""))
 
 
 def _wait(future, timeout_s: float, what: str):
@@ -88,6 +114,7 @@ class Capabilities:
         self.tf_listener = TransformListener(self.tf_buffer, node)
 
         self.perception = node.create_client(GetBoardState, "/perception/get_board_state")
+        self.reasoner = node.create_client(Reason, "/inference/reason")
         self.ik = node.create_client(GetPositionIK, "/compute_ik")
         self.cartesian = node.create_client(GetCartesianPath, "/compute_cartesian_path")
         self.arm_action = ActionClient(node, FollowJointTrajectory, "/arm_controller/follow_joint_trajectory")
@@ -139,6 +166,7 @@ class Capabilities:
             "arm_controller": self.arm_action.server_is_ready(),
             "gripper_controller": self.gripper_action.server_is_ready(),
             "calibration": self.calibrate_action.server_is_ready(),
+            "reasoning": self.reasoner.service_is_ready(),
         }
 
     # --- key-value store --------------------------------------------------------------
@@ -156,6 +184,24 @@ class Capabilities:
             raise CapabilityError("perception is not available")
         request = GetBoardState.Request(max_frame_age_s=max_frame_age_s)
         return _wait(self.perception.call_async(request), 5.0, "perception")
+
+    # --- reasoning ----------------------------------------------------------------------
+
+    def reason(self, role: int, prompt: str, images=(), json_schema: str = "", timeout_s: float = 60.0) -> Reason.Response | None:
+        """Ask the reasoning model; None when it is not running."""
+        if not self.reasoner.wait_for_service(timeout_sec=1.0):
+            return None
+        request = Reason.Request(role=role, prompt=prompt, images=list(images), json_schema=json_schema)
+        response = _wait(self.reasoner.call_async(request), timeout_s, "reasoning")
+        return response if response.result == Reason.Response.RESULT_OK else None
+
+    def camera_frame(self, topic: str = "/overhead_camera/image_raw", scale: int = 2, timeout_s: float = 3.0) -> CompressedImage | None:
+        """One camera frame as PNG (downscaled), for questions to the reasoning model."""
+        ok, msg = wait_for_message(Image, self.node, topic, qos_profile=qos_profile_sensor_data, time_to_wait=timeout_s)
+        if not ok or msg.encoding not in ("rgb8", "bgr8"):
+            return None
+        png = encode_png(bytes(msg.data), msg.width, msg.height, msg.step, msg.encoding == "bgr8", scale)
+        return CompressedImage(header=msg.header, format="png", data=png)
 
     # --- motion planning ------------------------------------------------------------
 
