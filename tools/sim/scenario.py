@@ -82,7 +82,8 @@ def respawn(board: dict, belief: dict) -> list[tuple[str, str, tuple[float, floa
     paths = pieces.write_models(board["square_size_m"])
     placed = pieces.layout(belief["fen"], belief.get("graveyard", []), board)
     models = [("board", paths["board"], tuple(board["origin_xyz"]), board["yaw_rad"])]
-    models += [(name, paths[letter], xyz, 0.0) for name, letter, xyz in placed]
+    # Pieces take the board's yaw, so knights face the opponent.
+    models += [(name, paths[letter], xyz, board["yaw_rad"]) for name, letter, xyz in placed]
     gzsim.spawn(models)
     time.sleep(2.0)  # let pieces settle
     return placed

@@ -14,8 +14,22 @@ from dataclasses import dataclass
 from chessbot_brain.board import square_index
 
 
-# Heights of the piece set, metres (base diameter 15 mm).
-PIECE_HEIGHTS = {"k": 0.042, "q": 0.037, "b": 0.033, "n": 0.030, "r": 0.026, "p": 0.022}
+def _piece_heights() -> dict[str, float]:
+    """Heights of the piece set, metres, from chessbot_description/pieces/pieces.json."""
+    try:
+        import json
+        import os
+
+        from ament_index_python.packages import get_package_share_directory
+
+        path = os.path.join(get_package_share_directory("chessbot_description"), "pieces", "pieces.json")
+        with open(path) as f:
+            return json.load(f)["height_m"]
+    except Exception:  # noqa: BLE001 - unit tests run without an installed workspace
+        return {"k": 0.042, "q": 0.037, "b": 0.033, "n": 0.030, "r": 0.026, "p": 0.022}
+
+
+PIECE_HEIGHTS = _piece_heights()
 
 
 @dataclass

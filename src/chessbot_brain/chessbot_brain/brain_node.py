@@ -74,7 +74,8 @@ BOARD_RESULT_TEXT = {
 }
 
 
-MESH_EXTENSIONS = {".stl", ".dae", ".obj", ".glb", ".gltf"}
+# Robot meshes, and the piece set description the UI draws pieces from.
+PACKAGE_FILE_EXTENSIONS = {".stl", ".dae", ".obj", ".glb", ".gltf", ".json"}
 
 
 class Busy(RuntimeError):
@@ -552,8 +553,8 @@ def build_app(node: BrainNode) -> FastAPI:
 
     @app.get("/packages/{package}/{path:path}")
     def package_file(package: str, path: str):
-        """Resolves the URDF's package:// mesh URIs for the browser (meshes only)."""
-        if os.path.splitext(path)[1].lower() not in MESH_EXTENSIONS:
+        """Resolves package:// URIs for the browser (meshes and asset descriptions only)."""
+        if os.path.splitext(path)[1].lower() not in PACKAGE_FILE_EXTENSIONS:
             raise HTTPException(status_code=404)
         try:
             share = os.path.normpath(get_package_share_directory(package))

@@ -37,7 +37,7 @@ contract. For example, `chessbot_motion` could be replaced by MoveIt.
 |---|---|---|---|
 | GET | `/api/state` | — | snapshot: phase, FEN, moves, clocks, robot name, graveyard (pieces the robot captured, with their slot in board squares), recent thoughts, capability availability, last error |
 | GET | `/api/robot_description` | — | the latest `/robot_description` URDF, for the UI's 3D view (503 until received) |
-| GET | `/packages/<package>/<path>` | — | resolves the URDF's `package://` mesh URIs (mesh files only) |
+| GET | `/packages/<package>/<path>` | — | package files for the browser: the URDF's `package://` meshes, and `chessbot_description/pieces/pieces.json` (the piece set the UI draws). Meshes and JSON only |
 | POST | `/api/new_game` | `{"robot_side": "black"\|"white", "engine_elo": 0}` | reset the game; the robot moves first if white |
 | POST | `/api/press_clock` | `{"move": "e2e4"}` (optional) | end the human's turn. Until camera move detection exists, the move must be given |
 | POST | `/api/calibrate` | — | run the calibration action |

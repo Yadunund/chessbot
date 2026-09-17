@@ -288,6 +288,15 @@ async function loadCalibration() {
   }
 }
 
+async function loadPieceSet() {
+  try {
+    const res = await fetch("/packages/chessbot_description/pieces/pieces.json");
+    if (res.ok) scene.setPieceSet(await res.json());
+  } catch (err) {
+    console.warn("could not load the piece set", err);
+  }
+}
+
 async function loadRobot() {
   for (;;) {
     try {
@@ -344,6 +353,7 @@ async function initViews() {
   setView(saved);
   if (!scene) return;
   if (state) scene.setBelief(state.fen, state.graveyard || []);
+  loadPieceSet();
   loadCalibration();
   loadRobot();
   setInterval(loadCalibration, 10000);

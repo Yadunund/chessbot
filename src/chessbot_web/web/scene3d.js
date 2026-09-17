@@ -38,53 +38,32 @@ export function webglAvailable() {
 }
 
 // --- pieces -------------------------------------------------------------------------
-// Turned profiles as [radius, height] pairs in units of one square.
+// Shapes and sizes come from the piece set description (chessbot_description/pieces/pieces.json):
+// radii as fractions of the base radius, heights as fractions of each piece's height.
 
-const BASE = [[0, 0], [0.36, 0], [0.36, 0.06], [0.33, 0.09], [0.3, 0.1], [0.3, 0.13], [0.24, 0.17]];
-
-function arc(centreHeight, radius, fromDeg, steps = 8) {
-  const points = [];
-  for (let i = 0; i <= steps; i++) {
-    const a = THREE.MathUtils.degToRad(fromDeg + ((90 - fromDeg) * i) / steps);
-    points.push([radius * Math.cos(a), centreHeight + radius * Math.sin(a)]);
-  }
-  return points;
-}
-
-const PROFILES = {
-  p: [...BASE, [0.16, 0.4], [0.14, 0.5], [0.24, 0.53], [0.24, 0.56], [0.12, 0.58], ...arc(0.72, 0.17, -55)],
-  r: [...BASE, [0.22, 0.3], [0.21, 0.72], [0.28, 0.76], [0.28, 0.98], [0.2, 0.98], [0.2, 0.9], [0, 0.9]],
-  b: [...BASE, [0.17, 0.45], [0.13, 0.72], [0.25, 0.76], [0.25, 0.79], [0.13, 0.82], [0.16, 0.86], [0.19, 0.98],
-    [0.15, 1.12], [0.07, 1.22], ...arc(1.29, 0.05, -40, 5)],
-  q: [...BASE, [0.19, 0.45], [0.13, 0.95], [0.28, 1.0], [0.28, 1.04], [0.14, 1.08], [0.2, 1.3], [0.24, 1.36],
-    [0.17, 1.38], [0.08, 1.42], ...arc(1.48, 0.07, -30, 6)],
-  k: [...BASE, [0.2, 0.45], [0.14, 1.0], [0.29, 1.05], [0.29, 1.09], [0.15, 1.13], [0.23, 1.4], [0.2, 1.45], [0, 1.47]],
-  n: [...BASE, [0.28, 0.3], [0, 0.3]],
-};
-
-// Knight head silhouette (forward = +x, up = +y), in squares.
-const KNIGHT_HEAD = [[-0.26, 0.28], [0.24, 0.28], [0.16, 0.55], [0.1, 0.7], [0.34, 0.8], [0.38, 0.92], [0.3, 1.02],
-  [0.1, 1.12], [0.02, 1.25], [-0.06, 1.12], [-0.22, 1.02], [-0.3, 0.75], [-0.28, 0.5]];
-
-function pieceGeometries(type, s) {
-  const lathe = new THREE.LatheGeometry(PROFILES[type].map(([r, h]) => new THREE.Vector2(r * s, h * s)), 40);
+function pieceGeometries(type, set) {
+  const radius = set.base_diameter_m / 2;
+  const height = set.height_m[type];
+  const lathe = new THREE.LatheGeometry(set.profile[type].map(([r, h]) => new THREE.Vector2(r * radius, h * height)), 40);
   lathe.rotateX(Math.PI / 2); // lathe axis y -> z
   const parts = [lathe];
   if (type === "k") {
-    const upright = new THREE.BoxGeometry(0.07 * s, 0.07 * s, 0.3 * s);
-    upright.translate(0, 0, 1.6 * s);
-    const bar = new THREE.BoxGeometry(0.22 * s, 0.07 * s, 0.07 * s);
-    bar.translate(0, 0, 1.64 * s);
+    const cross = set.king_cross;
+    const [uprightWidth, uprightHeight] = cross.upright;
+    const [barWidth, barHeight] = cross.bar;
+    const upright = new THREE.BoxGeometry(uprightWidth * radius, uprightWidth * radius, uprightHeight * height);
+    upright.translate(0, 0, cross.centre * height);
+    const bar = new THREE.BoxGeometry(barWidth * radius, uprightWidth * radius, barHeight * height);
+    bar.translate(0, 0, cross.bar_centre * height);
     parts.push(upright, bar);
   } else if (type === "n") {
-    const shape = new THREE.Shape(KNIGHT_HEAD.map(([x, y]) => new THREE.Vector2(x * s, y * s)));
-    const depth = 0.28 * s;
-    const head = new THREE.ExtrudeGeometry(shape, {
-      depth, bevelEnabled: true, bevelThickness: 0.03 * s, bevelSize: 0.03 * s, bevelSegments: 2,
-    });
-    head.translate(0, 0, -depth / 2);
-    head.rotateX(Math.PI / 2); // silhouette plane xy -> xz
-    parts.push(head);
+    const head = set.knight_head;
+    const shape = new THREE.Shape(head.outline.map(([x, y]) => new THREE.Vector2(x * radius, y * height)));
+    const depth = head.thickness * radius;
+    const geometry = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
+    geometry.translate(0, 0, -depth / 2);
+    geometry.rotateX(Math.PI / 2); // outline plane xy -> xz
+    parts.push(geometry);
   }
   return parts;
 }
@@ -131,6 +110,7 @@ export class BoardScene {
     this.controls.addEventListener("change", () => this.invalidate());
 
     this.robot = null;
+    this.pieceSet = null; // piece set description, loaded by the app
     this.board = null; // { group, pieces, s, frameId, key }
     this.beliefKey = "";
     this.view = "player";
@@ -263,7 +243,7 @@ export class BoardScene {
   // fen: the logical position; graveyard: [{piece, cell: [x, y]}] in squares.
   setBelief(fen, graveyard = []) {
     this.belief = { fen, graveyard };
-    if (!this.board) return;
+    if (!this.board || !this.pieceSet) return;
     const key = JSON.stringify(this.belief);
     if (key === this.beliefKey) return;
     this.beliefKey = key;
@@ -281,12 +261,18 @@ export class BoardScene {
     this.invalidate();
   }
 
+  setPieceSet(set) {
+    this.pieceSet = set;
+    this.geometryCache = new Map();
+    this.beliefKey = "";
+    if (this.belief) this.setBelief(this.belief.fen, this.belief.graveyard);
+  }
+
   pieceMesh(letter, s, x, y) {
     const type = letter.toLowerCase();
     const white = letter !== type;
     this.geometryCache ??= new Map();
-    const cacheKey = `${type}:${s}`;
-    if (!this.geometryCache.has(cacheKey)) this.geometryCache.set(cacheKey, pieceGeometries(type, s));
+    if (!this.geometryCache.has(type)) this.geometryCache.set(type, pieceGeometries(type, this.pieceSet));
     const group = new THREE.Group();
     for (const geometry of this.geometryCache.get(cacheKey)) {
       const mesh = new THREE.Mesh(geometry, white ? this.materials.white : this.materials.black);
