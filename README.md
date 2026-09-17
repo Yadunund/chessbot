@@ -85,6 +85,8 @@ board's position automatically, and promotion piece swaps.
 ## Learn more
 
 - [Design](docs/design.md): architecture, components and how data flows
+  reusable parts of it
+- [Hardware](docs/hardware.md): running on the real SO-101
 - [Interfaces](docs/interfaces.md): every boundary and its type
 - [Skills](src/chessbot_brain/skills/README.md): the robot's actions and their contracts
 - [Licensing](docs/licensing.md): dependency policy
