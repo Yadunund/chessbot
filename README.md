@@ -93,10 +93,12 @@ question about the same frame, and an answer that survives both is trusted. On t
 light, it did not survive, which is the point of asking.
 
 The motion scenarios (`pixi run sim-test`) pass 13 cases, including castling, the edge and far
-files, and full robot turns with a capture, placing pieces within 0.8 mm. En passant and
-promotion still fail, and both now report in seconds rather than hanging.
+files, a capture and full robot turns, placing pieces within 0.8 mm. Three fail: en passant
+(the arm loses the captured piece), promotion, and the middlegame capture. All three now
+report in seconds instead of running indefinitely.
 
-Next: tuning motion against the real arm, move-reading accuracy, en passant and promotion.
+Next: tuning motion against the real arm, the three failing scenarios, and move-reading
+accuracy.
 
 ## Learn more
 
