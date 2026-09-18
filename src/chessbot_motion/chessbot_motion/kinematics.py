@@ -10,6 +10,7 @@ vertical approach; roll is left free when no opening direction is given.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,6 +25,9 @@ SEED_WEIGHT = 0.003
 MAX_JOINT_STEP = 0.12
 # How far inside its limits each joint is kept, radians.
 LIMIT_MARGIN = 0.05
+# A target this far from anything the arm can reach, by the sampled scan, is refused without
+# attempting to solve. Generous: the scan is coarse, so this only catches the hopeless cases.
+OUT_OF_REACH_M = 0.12
 
 
 @dataclass
@@ -215,6 +219,15 @@ class ArmKinematics:
 
         candidates = rng.uniform(self.lower, self.upper, size=(samples, len(self.joint_names)))
         distances = np.array([np.linalg.norm(self.forward(q)[0] - target_position) for q in candidates])
+        # Refuse a hopeless target here rather than grinding on it. Refinement pulls the tool
+        # a few centimetres at most, so if neither the seed nor the closest of several hundred
+        # sampled configurations gets anywhere near, no amount of least squares will: without
+        # this, an out of reach square costs dozens of full solves, each of which runs to its
+        # iteration limit because nothing ever converges.
+        closest = min(float(distances.min()), float(np.linalg.norm(self.forward(seed)[0] - target_position)))
+        if closest > OUT_OF_REACH_M:
+            return IkResult(np.asarray(seed, dtype=float), False, closest, math.pi)
+
         seeds = [seed, *candidates[np.argsort(distances)[:seeds_to_refine]]]
         seeds += list(rng.uniform(self.lower, self.upper, size=(restarts, len(self.joint_names))))
 
