@@ -11,9 +11,10 @@
 
     <!-- This simulation runs at about a third of real time, and the cost is collision
          checking against the arm's full detail collision meshes. Measured alternatives:
-         Bullet's collision detector is worse here (0.20 against 0.32), and 4 ms steps do
-         reach real time but make the grasp unreliable - a held piece tilts out of the jaws.
-         So the step stays at 1 ms and the remaining fix is simpler collision geometry. -->
+         Bullet's collision detector is worse here (0.20 against 0.32), 4 ms steps do reach
+         real time but make the grasp unreliable (a held piece tilts out of the jaws), and
+         turning the contact sensors off is worth almost nothing (0.34). So the step stays at
+         1 ms and the remaining fix is simpler collision geometry for the arm. -->
     <physics name="1ms" type="ignored">
       <max_step_size>0.001</max_step_size>
       <real_time_factor>1.0</real_time_factor>

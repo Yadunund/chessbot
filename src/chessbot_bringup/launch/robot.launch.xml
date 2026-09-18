@@ -22,6 +22,8 @@
   <arg name="description_file" default="$(find-pkg-share chessbot_description)/urdf/so101.urdf.xacro" />
   <arg name="controllers_file" default="$(find-pkg-share chessbot_description)/config/controllers.yaml" />
   <arg name="cameras" default="true" description="Cameras: simulated or USB. False speeds up motion tests." />
+  <arg name="contact_sensors" default="true"
+       description="Simulated contact sensors on the arm; the motion scenarios measure collisions with them. Turning them off barely changes the simulation's speed (0.34 against 0.32 real time), so leave them on unless you want the topics quiet." />
   <arg name="wrist_camera" default="true" description="False where only the overhead camera is fitted." />
   <arg name="overhead_device" default="/dev/cam_overhead" description="Overhead camera device (hardware:=real)." />
   <arg name="wrist_device" default="/dev/cam_wrist" description="Wrist camera device (hardware:=real)." />
@@ -34,7 +36,7 @@
   <let name="simulated" value="$(eval '&quot;$(var hardware)&quot; == &quot;gazebo&quot;')" />
 
   <let name="robot_description"
-       value="$(command 'xacro $(var description_file) hardware:=$(var hardware) cameras:=$(var cameras) controllers_file:=$(var controllers_file) usb_port:=&quot;$(var usb_port)&quot; joint_config_file:=&quot;$(var joint_config_file)&quot; overhead_xyz:=&quot;$(var overhead_xyz)&quot; overhead_rpy:=&quot;$(var overhead_rpy)&quot;')" />
+       value="$(command 'xacro $(var description_file) hardware:=$(var hardware) cameras:=$(var cameras) contact_sensors:=$(var contact_sensors) controllers_file:=$(var controllers_file) usb_port:=&quot;$(var usb_port)&quot; joint_config_file:=&quot;$(var joint_config_file)&quot; overhead_xyz:=&quot;$(var overhead_xyz)&quot; overhead_rpy:=&quot;$(var overhead_rpy)&quot;')" />
 
   <node_container pkg="rclcpp_components" exec="component_container" name="$(var container)"
                   namespace="" args="--executor-type events-cbg" output="screen" />

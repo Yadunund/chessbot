@@ -14,6 +14,7 @@
   <xacro:arg name="hardware" default="gazebo" />
   <!-- Camera sensors cost most of the simulation time; motion tests turn them off. -->
   <xacro:arg name="cameras" default="true" />
+  <xacro:arg name="contact_sensors" default="true" />
   <xacro:arg name="usb_port" default="/dev/so101" />
   <xacro:arg name="controllers_file" default="" />
   <!-- Real hardware: servo calibration (homing offsets, ranges); see config/hardware. -->
@@ -134,12 +135,14 @@
       <xacro:contact_collisions link="${link}" index="${index + 1}" count="${count}" />
     </xacro:if>
   </xacro:macro>
-  <xacro:contact_sensor link="shoulder_link" count="3" />
-  <xacro:contact_sensor link="upper_arm_link" count="2" />
-  <xacro:contact_sensor link="lower_arm_link" count="3" />
-  <xacro:contact_sensor link="wrist_link" count="2" />
-  <xacro:contact_sensor link="gripper_link" count="2" />
-  <xacro:contact_sensor link="jaw_link" count="1" />
+  <xacro:if value="$(arg contact_sensors)">
+    <xacro:contact_sensor link="shoulder_link" count="3" />
+    <xacro:contact_sensor link="upper_arm_link" count="2" />
+    <xacro:contact_sensor link="lower_arm_link" count="3" />
+    <xacro:contact_sensor link="wrist_link" count="2" />
+    <xacro:contact_sensor link="gripper_link" count="2" />
+    <xacro:contact_sensor link="jaw_link" count="1" />
+  </xacro:if>
 
   <gazebo>
     <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">

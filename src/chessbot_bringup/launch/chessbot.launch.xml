@@ -17,6 +17,7 @@
   <!-- Robot -->
   <arg name="cameras" default="true" description="Cameras: simulated or USB. False speeds up motion tests." />
   <arg name="wrist_camera" default="true" description="False where only the overhead camera is fitted." />
+  <arg name="contact_sensors" default="true" description="Simulated contact sensors; the motion scenarios measure with them." />
   <arg name="overhead_device" default="/dev/cam_overhead" description="Overhead camera device (hardware:=real)." />
   <arg name="wrist_device" default="/dev/cam_wrist" description="Wrist camera device (hardware:=real)." />
   <arg name="usb_port" default="/dev/so101" description="Servo bus (hardware:=real; udev rules give it this name)." />
@@ -49,6 +50,7 @@
     <arg name="container" value="$(var container)" />
     <arg name="cameras" value="$(var cameras)" />
     <arg name="wrist_camera" value="$(var wrist_camera)" />
+    <arg name="contact_sensors" value="$(var contact_sensors)" />
     <arg name="overhead_device" value="$(var overhead_device)" />
     <arg name="wrist_device" value="$(var wrist_device)" />
     <arg name="usb_port" value="$(var usb_port)" />

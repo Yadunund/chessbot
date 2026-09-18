@@ -50,23 +50,40 @@ def as_array(msg) -> np.ndarray:
 
 
 def moved_pixel(before, after, threshold: int = 35, min_pixels: int = 40):
-    """Where the picture changed between two frames, weighted by how much.
+    """Where the picture changed between two frames, and how much of it changed.
 
     Used with the jaws closed and then open: the jaws are then the only thing that moved, so
-    this is where the gripper is in the image.
+    this is where the gripper is in the image. Returns (pixel, changed pixel count) so the
+    caller can throw out samples where something else moved too - see `keep_consistent`.
     """
     if before is None or after is None:
-        return None
+        return None, 0
     first, second = as_array(before).astype(np.int16), as_array(after).astype(np.int16)
     if first.shape != second.shape:
-        return None
+        return None, 0
     difference = np.abs(second - first).sum(axis=2)
     mask = difference > threshold * 3
-    if int(mask.sum()) < min_pixels:
-        return None
+    changed = int(mask.sum())
+    if changed < min_pixels:
+        return None, changed
     ys, xs = np.nonzero(mask)
     weights = difference[ys, xs].astype(float)
-    return (float((xs * weights).sum() / weights.sum()), float((ys * weights).sum() / weights.sum()))
+    centre = (float((xs * weights).sum() / weights.sum()), float((ys * weights).sum() / weights.sum()))
+    return centre, changed
+
+
+def keep_consistent(samples, low: float = 0.4, high: float = 2.5):
+    """Drop samples whose changed area is nothing like the rest.
+
+    The jaws sweep about the same area whichever pose they are in, so a sample that changed
+    several times more pixels than the others had something else moving in it - usually the
+    whole arm flexing as the gripper actuates - and its centroid is not the gripper. Those
+    samples pull the fit badly, and are cheaper to discard than to model.
+    """
+    if len(samples) < 3:
+        return samples
+    median = float(np.median([count for _position, _pixel, count in samples]))
+    return [s for s in samples if low * median <= s[2] <= high * median]
 
 
 @dataclass

@@ -598,7 +598,7 @@ class BrainNode(Node):
             centre_px = (centre[0], centre[1]) if centre and centre[0] else (frame.width / 2, frame.height / 2)
             focal_px = centre[2] if centre and centre[2] > 100.0 else calib.DEFAULT_FOCAL_PX
 
-            points, pixels = [], []
+            samples = []
             self.caps.gripper(self.caps.arm.gripper_closed)
             for target in calib.CAMERA_SAMPLES:
                 try:
@@ -611,22 +611,27 @@ class BrainNode(Node):
                 opened = self.caps.camera_raw()
                 self.caps.gripper(self.caps.arm.gripper_closed)
                 position, _yaw = self.caps.tool_pose()
-                pixel = calib.moved_pixel(closed, opened)
+                pixel, changed = calib.moved_pixel(closed, opened)
                 if pixel is None:
                     continue
-                points.append(position)
-                pixels.append(pixel)
+                samples.append((position, pixel, changed))
                 self.think(Thought.PERCEIVE, f"Gripper at {tuple(round(v, 3) for v in position)} "
                                              f"seen at ({pixel[0]:.0f}, {pixel[1]:.0f}).")
 
-            if len(points) < 5:
-                self.think(Thought.RECOVER, f"Only saw the gripper at {len(points)} poses; need 5. "
-                                            "Check that the arm is in the camera's view.")
+            kept = calib.keep_consistent(samples)
+            if len(kept) < len(samples):
+                self.think(Thought.PERCEIVE, f"Ignored {len(samples) - len(kept)} poses where more than "
+                                             "the jaws moved.")
+            if len(kept) < 5:
+                self.think(Thought.RECOVER, f"Only saw the gripper cleanly at {len(kept)} poses; need 5. "
+                                            "Check that the arm is in the camera's view and well lit.")
                 return
+            points = [position for position, _pixel, _count in kept]
+            pixels = [pixel for _position, pixel, _count in kept]
             model = calib.fit_camera(points, pixels, centre_px, focal_px)
             self.draft.camera = model
             self.think(Thought.VERIFY, f"Camera at {tuple(round(v, 3) for v in model.position)}, "
-                                       f"fit {model.error_mean_px:.0f} px mean over {len(points)} poses.")
+                                       f"fit {model.error_mean_px:.0f} px mean over {len(kept)} poses.")
         finally:
             self.set_phase(previous)
 
