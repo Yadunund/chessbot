@@ -29,7 +29,6 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data
-from rclpy.wait_for_message import wait_for_message
 from sensor_msgs.msg import CompressedImage, Image
 from tf2_ros import Buffer, TransformException, TransformListener
 from sensor_msgs.msg import JointState
@@ -196,9 +195,28 @@ class Capabilities:
         return response if response.result == Reason.Response.RESULT_OK else None
 
     def camera_frame(self, topic: str = "/overhead_camera/image_raw", scale: int = 2, timeout_s: float = 3.0) -> CompressedImage | None:
-        """One camera frame as PNG (downscaled), for questions to the reasoning model."""
-        ok, msg = wait_for_message(Image, self.node, topic, qos_profile=qos_profile_sensor_data, time_to_wait=timeout_s)
-        if not ok or msg.encoding not in ("rgb8", "bgr8"):
+        """One camera frame as PNG (downscaled), for questions to the reasoning model.
+
+        Subscribed on demand rather than through `wait_for_message`, whose own wait set
+        competes with the node's executor for the message and loses.
+        """
+        arrived = threading.Event()
+        frames: list[Image] = []
+
+        def on_image(msg: Image):
+            if not frames:
+                frames.append(msg)
+                arrived.set()
+
+        subscription = self.node.create_subscription(Image, topic, on_image, qos_profile_sensor_data)
+        try:
+            arrived.wait(timeout_s)
+        finally:
+            self.node.destroy_subscription(subscription)
+        if not frames:
+            return None
+        msg = frames[0]
+        if msg.encoding not in ("rgb8", "bgr8"):
             return None
         png = encode_png(bytes(msg.data), msg.width, msg.height, msg.step, msg.encoding == "bgr8", scale)
         return CompressedImage(header=msg.header, format="png", data=png)
@@ -226,7 +244,9 @@ class Capabilities:
         by_name = dict(zip(response.solution.joint_state.name, response.solution.joint_state.position))
         return [by_name[j] for j in self.arm.joints]
 
-    def plan_cartesian(self, waypoints_xyz, quat=DOWN, frame_id: str = "base_link") -> JointTrajectory:
+    def plan_cartesian(
+        self, waypoints_xyz, quat=DOWN, frame_id: str = "base_link", speed_scale: float = 1.0
+    ) -> JointTrajectory:
         if not self.cartesian.wait_for_service(timeout_sec=2.0):
             raise CapabilityError("Cartesian planning is not available")
         request = GetCartesianPath.Request()
@@ -234,6 +254,7 @@ class Capabilities:
         request.group_name = "arm"
         request.waypoints = [self._pose(xyz, quat) for xyz in waypoints_xyz]
         request.max_step = 0.005
+        request.max_velocity_scaling_factor = float(speed_scale)
         response = _wait(self.cartesian.call_async(request), 10.0, "Cartesian planning")
         if response.fraction < 0.999:
             raise CapabilityError(f"Cartesian path only {response.fraction:.0%} feasible")
@@ -243,7 +264,7 @@ class Capabilities:
         """A two-point trajectory to a joint target, timed at the configured speed."""
         current = self.joint_positions()
         travel = max(abs(a - b) for a, b in zip(current, target))
-        duration = max(1.0, travel / self.arm.joint_speed)
+        duration = max(0.4, travel / self.arm.joint_speed)
         trajectory = JointTrajectory()
         trajectory.joint_names = list(self.arm.joints)
         start = JointTrajectoryPoint(positions=current, time_from_start=Duration(seconds=0.0).to_msg())

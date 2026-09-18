@@ -188,6 +188,8 @@ def main():
     args = parser.parse_args()
 
     # Start every run from the park pose, so one failure cannot carry into the next.
+    # The brain parks itself on startup, so let whatever it is doing finish first.
+    wait_idle()
     http("POST", "/api/park")
     wait_idle()
     if args.fen:
