@@ -19,6 +19,8 @@
   <arg name="rest_port" default="8000" />
   <arg name="calibration_file" default="$(env HOME)/.chessbot/calibration.yaml" />
   <arg name="llm_url" default="http://127.0.0.1:8081" description="llama-server serving the reasoning model (pixi run llm)." />
+  <arg name="joint_velocity" default="1.6" description="Top joint speed, rad/s." />
+  <arg name="cartesian_speed" default="0.08" description="Top tool speed along a path, m/s." />
 
   <!-- Perception: camera frames in, board facts out on request. -->
   <load_composable_node target="$(var container)">
@@ -52,6 +54,8 @@
   <!-- Motion: Cartesian planning and IK over the robot description. -->
   <node pkg="chessbot_motion" exec="motion_node" name="motion" output="screen">
     <param name="use_sim_time" value="$(var use_sim_time)" />
+    <param name="max_joint_velocity" value="$(var joint_velocity)" />
+    <param name="max_cartesian_speed" value="$(var cartesian_speed)" />
   </node>
 
   <!-- Reasoning: Gemma behind the Reason service. Without a model server it answers "unavailable". -->
@@ -71,6 +75,7 @@
     <node pkg="chessbot_brain" exec="brain_node" name="brain" output="screen">
       <param name="use_sim_time" value="$(var use_sim_time)" />
       <param name="rest_port" value="$(var rest_port)" />
+      <param name="joint_speed" value="$(var joint_velocity)" />
       <param name="web_root" value="$(find-pkg-share chessbot_web)/web" />
     </node>
   </group>

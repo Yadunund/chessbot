@@ -9,9 +9,17 @@
 <sdf version="1.9">
   <world name="chessbot">
 
+    <!-- The arm's collision geometry is a set of full detail meshes, and checking them with
+         the default collision detector cost so much that the simulation ran at a third of
+         real time. Bullet's detector handles meshes far faster; the step stays at 1 ms,
+         because coarser steps make the grasp itself unreliable (a held piece tilts out of
+         the jaws). Timing is what we compare against the real arm, so it has to be right. -->
     <physics name="1ms" type="ignored">
       <max_step_size>0.001</max_step_size>
       <real_time_factor>1.0</real_time_factor>
+      <dart>
+        <collision_detector>bullet</collision_detector>
+      </dart>
     </physics>
 
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics" />
