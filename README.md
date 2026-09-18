@@ -92,7 +92,11 @@ Gemma's advice is only accepted when it can be shown to be reading the image: it
 question about the same frame, and an answer that survives both is trusted. On the real board, in poor
 light, it did not survive, which is the point of asking.
 
-Next: tuning motion against the real arm, move-reading accuracy, and promotion piece swaps.
+The motion scenarios (`pixi run sim-test`) pass 13 cases, including castling, the edge and far
+files, and full robot turns with a capture, placing pieces within 0.8 mm. En passant and
+promotion still fail, and both now report in seconds rather than hanging.
+
+Next: tuning motion against the real arm, move-reading accuracy, en passant and promotion.
 
 ## Learn more
 
