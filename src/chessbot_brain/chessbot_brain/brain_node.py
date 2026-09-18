@@ -85,6 +85,8 @@ PACKAGE_FILE_EXTENSIONS = {".stl", ".dae", ".obj", ".glb", ".gltf", ".json"}
 # the base, within reach, and above the table. An uncalibrated rig does not know where the
 # board is, so nothing may be commanded outside this.
 JOG_BOX = ((0.08, 0.30), (-0.18, 0.18), (0.04, 0.30))
+# Most one press of a per-joint jog may turn a joint, radians (about 17 degrees).
+MAX_JOINT_JOG = 0.3
 
 
 class Busy(RuntimeError):
@@ -529,7 +531,7 @@ class BrainNode(Node):
         self._commentary.submit(self._comment_on, fen_before, human_move, reply)
 
         self.set_phase(GameState.PHASE_VERIFYING)
-        skills.park(self.caps, self.park_joints, self.geometry_if_calibrated())
+        skills.park(self.caps, self.park_pose(), self.geometry_if_calibrated())
         response = self.caps.board_state(max_frame_age_s=1.0)
         self.think(Thought.VERIFY, f"Verification: {BOARD_RESULT_TEXT.get(response.result, 'unknown result')}.")
         if self._game_over():
@@ -546,8 +548,18 @@ class BrainNode(Node):
         self.think(Thought.VERIFY, f"Calibration finished (result {result.result}) → {result.profile_path}")
         self.set_phase(previous)
 
+    def park_pose(self) -> list[float]:
+        """Where the arm waits: what calibration stored, else the launch parameter.
+
+        Read on each park rather than cached, so a pose saved through the setup workflow
+        applies immediately and still applies after a restart.
+        """
+        profile = self.caps.kv_get("chessbot/kv/calibration") or {}
+        stored = [float(v) for v in (profile.get("park_joints") or [])]
+        return stored if len(stored) == len(self.caps.arm.joints) else list(self.park_joints)
+
     def job_park(self):
-        skills.park(self.caps, self.park_joints, self.geometry_if_calibrated())
+        skills.park(self.caps, self.park_pose(), self.geometry_if_calibrated())
         self.think(Thought.ACT, "Arm parked.")
 
     def job_resume(self):
@@ -574,6 +586,23 @@ class BrainNode(Node):
         if step is None:
             raise CapabilityError(f"unknown axis {axis!r}")
         self.job_move_tool((x + step[0], y + step[1], z + step[2]), math.degrees(yaw))
+
+    def job_jog_joint(self, joint: str, delta_rad: float):
+        """Turn one joint by a small amount.
+
+        Unlike the Cartesian jog this does not go through IK, so it can reach poses no tool
+        target describes - which is the point when posing the arm by hand - and it is not
+        bounded by the safe box. The step is capped instead, so a mistyped request cannot
+        throw the arm across the table.
+        """
+        names = list(self.caps.arm.joints)
+        if joint not in names:
+            raise CapabilityError(f"unknown joint {joint!r}")
+        step = max(-MAX_JOINT_JOG, min(MAX_JOINT_JOG, float(delta_rad)))
+        target = self.caps.joint_positions()
+        target[names.index(joint)] += step
+        self.caps.execute(self.caps.joint_move_trajectory(target))
+        self.think(Thought.ACT, f"{joint} to {target[names.index(joint)]:.3f} rad.")
 
     def job_gripper(self, position: float):
         self.caps.gripper(position)
@@ -666,8 +695,13 @@ class BrainNode(Node):
         return out
 
     def calibration_park_here(self) -> dict:
-        """Take the arm's current joints as the park pose: jog it there, then save it."""
+        """Take the arm's current joints as the park pose: jog it there, then save it.
+
+        Applied straight away, so Home goes to it before the calibration is saved; saving is
+        what makes it survive a restart.
+        """
         self.draft.park_joints = self.caps.joint_positions()
+        self.park_joints = list(self.draft.park_joints)
         self.think(Thought.EXPLAIN, f"Park pose set to {[round(v, 3) for v in self.draft.park_joints]}.")
         return self.draft.steps()
 
@@ -716,7 +750,7 @@ class BrainNode(Node):
         others = self.believed_pieces(geometry)
         others.pop(src, None)
         skills.transfer(self.caps, geometry, geometry.square_centre(src), geometry.square_centre(dst), list(others.values()))
-        skills.park(self.caps, self.park_joints, self.geometry_if_calibrated())
+        skills.park(self.caps, self.park_pose(), self.geometry_if_calibrated())
         self.set_phase(previous)
 
 
@@ -756,6 +790,11 @@ class MoveTool(BaseModel):
 class Jog(BaseModel):
     axis: str
     delta_m: float
+
+
+class JogJoint(BaseModel):
+    joint: str
+    delta_rad: float
 
 
 class Gripper(BaseModel):
@@ -842,6 +881,10 @@ def build_app(node: BrainNode) -> FastAPI:
         if body.axis not in ("x", "y", "z"):
             raise HTTPException(status_code=422, detail="axis must be x, y or z")
         return submit("jog", node.job_jog, body.axis, body.delta_m)
+
+    @app.post("/api/dev/jog_joint")
+    def jog_joint(body: JogJoint):
+        return submit("jog_joint", node.job_jog_joint, body.joint, body.delta_rad)
 
     @app.post("/api/dev/gripper")
     def gripper(body: Gripper):

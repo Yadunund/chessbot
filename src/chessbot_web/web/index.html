@@ -105,6 +105,17 @@
             <button id="jaws-open" type="button">Open jaws</button>
             <button id="jaws-close" type="button">Close jaws</button>
           </div>
+          <div class="jog-head">
+            <span class="hint">By joint</span>
+            <label class="step">Step
+              <select id="joint-step">
+                <option value="0.02">1°</option>
+                <option value="0.087" selected>5°</option>
+                <option value="0.175">10°</option>
+              </select>
+            </label>
+          </div>
+          <div class="jog-joints" id="jog-joints"></div>
         </div>
       </div>
 

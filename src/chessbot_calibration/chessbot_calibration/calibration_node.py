@@ -34,7 +34,7 @@ class CalibrationNode(Node):
         self.profile_path = self.declare_parameter("profile_path", "calibration.yaml").value
         self.zenoh_endpoint = self.declare_parameter("zenoh_endpoint", "tcp/127.0.0.1:7447").value
 
-        self.session = zenoh.open(self._zenoh_config())
+        self.session = self._open_session()
         self.profile = prof.load(self.profile_path)
         if self.profile is None:
             self.get_logger().warning(f"No usable calibration at {self.profile_path}; writing the nominal profile")
@@ -52,6 +52,27 @@ class CalibrationNode(Node):
         )
         self.create_service(SetCalibration, "/calibration/set", self._on_set)
         self.get_logger().info("Serving /calibration/calibrate and /calibration/set")
+
+    def _open_session(self, timeout_s: float = 30.0):
+        """Wait for the router rather than dying if this node starts before it.
+
+        Launch order should not decide whether the application comes up.
+        """
+        deadline = time.monotonic() + timeout_s
+        warned = False
+        while True:
+            try:
+                return zenoh.open(self._zenoh_config())
+            except Exception as exc:  # noqa: BLE001 - any failure to reach the router
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"no Zenoh router at {self.zenoh_endpoint} after {timeout_s:.0f}s; "
+                        "start one with `pixi run router`"
+                    ) from exc
+                if not warned:
+                    self.get_logger().warning(f"Waiting for the Zenoh router at {self.zenoh_endpoint}...")
+                    warned = True
+                time.sleep(1.0)
 
     def _zenoh_config(self) -> zenoh.Config:
         config = zenoh.Config()

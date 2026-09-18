@@ -20,7 +20,9 @@
   <arg name="container" default="robot_io" />
   <arg name="world" default="$(find-pkg-share chessbot_description)/worlds/chessbot.sdf" />
   <arg name="description_file" default="$(find-pkg-share chessbot_description)/urdf/so101.urdf.xacro" />
-  <arg name="controllers_file" default="$(find-pkg-share chessbot_description)/config/controllers.yaml" />
+  <!-- Real servos need looser arrival tolerances than simulated ones; see the file itself. -->
+  <arg name="controllers_file"
+       default="$(eval '&quot;$(find-pkg-share chessbot_description)/config/controllers.yaml&quot; if &quot;$(var hardware)&quot; == &quot;gazebo&quot; else &quot;$(find-pkg-share chessbot_description)/config/controllers_real.yaml&quot;')" />
   <arg name="cameras" default="true" description="Cameras: simulated or USB. False speeds up motion tests." />
   <arg name="contact_sensors" default="true"
        description="Simulated contact sensors on the arm; the motion scenarios measure collisions with them. Turning them off barely changes the simulation's speed (0.34 against 0.32 real time), so leave them on unless you want the topics quiet." />

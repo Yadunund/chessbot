@@ -285,6 +285,10 @@ async function refreshToolPose() {
     const pose = await res.json();
     const [x, y, z] = pose.xyz;
     $("tool-pose").textContent = `tool ${(x * 100).toFixed(1)}, ${(y * 100).toFixed(1)}, ${(z * 100).toFixed(1)} cm`;
+    ARM_JOINTS.forEach(([joint, label], i) => {
+      const cell = $(`jv-${joint}`);
+      if (cell && pose.joints) cell.textContent = `${label} ${((pose.joints[i] * 180) / Math.PI).toFixed(0)}°`;
+    });
   } catch {
     $("tool-pose").textContent = "tool —";
   }
@@ -297,6 +301,27 @@ for (const button of document.querySelectorAll("[data-jog]")) {
     setTimeout(refreshToolPose, 1200);
   });
 }
+// Per joint, for poses no tool target describes - posing the arm where it should wait, or
+// backing one joint off a limit.
+const ARM_JOINTS = [
+  ["shoulder_pan_joint", "pan"],
+  ["shoulder_lift_joint", "lift"],
+  ["elbow_flex_joint", "elbow"],
+  ["wrist_flex_joint", "wrist"],
+  ["wrist_roll_joint", "roll"],
+];
+$("jog-joints").innerHTML = ARM_JOINTS.map(([joint, label]) =>
+  `<span class="name" id="jv-${joint}">${label}</span>` +
+  `<button data-joint="${joint}" data-sign="-1" type="button">−</button>` +
+  `<button data-joint="${joint}" data-sign="1" type="button">+</button>`).join("");
+for (const button of document.querySelectorAll("[data-joint]")) {
+  button.addEventListener("click", async () => {
+    const step = Number($("joint-step").value) * Number(button.dataset.sign);
+    await post("/api/dev/jog_joint", { joint: button.dataset.joint, delta_rad: step });
+    setTimeout(refreshToolPose, 1200);
+  });
+}
+
 $("jaws-open").addEventListener("click", () => post("/api/dev/gripper", { open: true }));
 $("jaws-close").addEventListener("click", () => post("/api/dev/gripper", { open: false }));
 setInterval(refreshToolPose, 2000);

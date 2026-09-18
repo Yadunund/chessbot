@@ -14,6 +14,7 @@ import json
 import math
 import struct
 import threading
+import time
 import zlib
 from dataclasses import dataclass
 
@@ -72,6 +73,30 @@ def encode_png(data: bytes, width: int, height: int, step: int, bgr: bool, scale
             + chunk(b"IDAT", zlib.compress(b"".join(rows), 6)) + chunk(b"IEND", b""))
 
 
+def open_zenoh(config, endpoint: str, logger=None, timeout_s: float = 30.0):
+    """Open a Zenoh session, waiting for the router instead of dying if it is not up yet.
+
+    Launch order should not decide whether the application comes up. A node that started a
+    moment before the router used to exit with a bare traceback, leaving a stack that looked
+    half alive - the nodes that do not use the store kept running, and the UI simply never
+    appeared.
+    """
+    deadline = time.monotonic() + timeout_s
+    warned = False
+    while True:
+        try:
+            return zenoh.open(config)
+        except Exception as exc:  # noqa: BLE001 - any failure to reach the router
+            if time.monotonic() >= deadline:
+                raise CapabilityError(
+                    f"no Zenoh router at {endpoint} after {timeout_s:.0f}s; start one with `pixi run router`"
+                ) from exc
+            if logger is not None and not warned:
+                logger.warning(f"Waiting for the Zenoh router at {endpoint}...")
+                warned = True
+            time.sleep(1.0)
+
+
 def _wait(future, timeout_s: float, what: str):
     done = threading.Event()
     future.add_done_callback(lambda _f: done.set())
@@ -124,7 +149,7 @@ class Capabilities:
         config = zenoh.Config()
         config.insert_json5("mode", '"client"')
         config.insert_json5("connect/endpoints", f'["{zenoh_endpoint}"]')
-        self.zenoh = zenoh.open(config)
+        self.zenoh = open_zenoh(config, zenoh_endpoint, node.get_logger())
 
     def close(self):
         self.zenoh.close()

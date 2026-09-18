@@ -1,0 +1,54 @@
+# Controllers for the SO-101 on real hardware.
+#
+# Same controllers as in simulation; only what counts as "arrived" differs. A simulated
+# joint settles exactly on its command, so simulation can insist on 0.01 rad. A real servo
+# holding the arm's weight sits a degree or two below its command and stays there, so the
+# same tolerance is never satisfied and every goal aborts on goal_time_tolerance after the
+# trajectory has finished - the arm moves, stops in roughly the right place, and reports
+# failure. These tolerances are what the servos can actually hold.
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+    enforce_command_limits: false
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    gripper_controller:
+      type: parallel_gripper_action_controller/GripperActionController
+
+arm_controller:
+  ros__parameters:
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_flex_joint
+      - wrist_flex_joint
+      - wrist_roll_joint
+    allow_partial_joints_goal: false
+    # A goal succeeds only once the arm has arrived and stopped, not when its time is up,
+    # so the gripper never acts while the arm is still settling.
+    constraints:
+      stopped_velocity_tolerance: 0.05
+      goal_time: 5.0
+      # About three degrees: more than gravity sag, less than half a square at the board.
+      shoulder_pan_joint: {goal: 0.05}
+      shoulder_lift_joint: {goal: 0.05}
+      elbow_flex_joint: {goal: 0.05}
+      wrist_flex_joint: {goal: 0.05}
+      wrist_roll_joint: {goal: 0.05}
+
+gripper_controller:
+  ros__parameters:
+    joint: gripper_joint
+    # Closing on a piece never reaches the command, so a stall is success. The jaw keeps
+    # creeping against a piece, so the stall threshold is well above zero velocity.
+    allow_stalling: true
+    stall_velocity_threshold: 0.02
+    stall_timeout: 0.5
+    goal_tolerance: 0.02
