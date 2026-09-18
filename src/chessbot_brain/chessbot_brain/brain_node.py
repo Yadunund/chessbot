@@ -664,11 +664,28 @@ class BrainNode(Node):
         finally:
             self.set_phase(previous)
 
+    def camera_model(self) -> calib.CameraModel:
+        """The camera to measure the board against.
+
+        The refined one if it has been measured, otherwise the one the robot description
+        already carries, read through TF. Marking the board is the only step that is really
+        needed: measuring the camera makes it more accurate where the mount is not where the
+        description says.
+        """
+        if self.draft.camera is not None:
+            return self.draft.camera
+        position, rpy = self.caps.camera_pose()
+        centre = self.caps.camera_centre()
+        frame = self.caps.camera_raw()
+        if frame is None and centre is None:
+            raise CapabilityError("no camera frames or camera_info yet")
+        centre_px = (centre[0], centre[1]) if centre and centre[0] else (frame.width / 2, frame.height / 2)
+        focal_px = centre[2] if centre and centre[2] > 100.0 else calib.DEFAULT_FOCAL_PX
+        return calib.CameraModel(position=position, rpy=rpy, focal_px=focal_px, centre_px=centre_px)
+
     def calibration_board(self, corners) -> dict:
         """The board pose implied by four corners marked in the camera image (a1, h1, h8, a8)."""
-        if self.draft.camera is None:
-            raise CapabilityError("measure the camera first")
-        board = calib.board_from_corners(self.draft.camera, corners)
+        board = calib.board_from_corners(self.camera_model(), corners)
         if board is None:
             raise CapabilityError("those corners do not point at the table")
         self.draft.board_origin_xyz = board.origin_xyz

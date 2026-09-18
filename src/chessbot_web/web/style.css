@@ -214,6 +214,7 @@ button.ghost { background: transparent; }
 .steps li { border-top: 1px solid var(--stone); padding-top: 16px; }
 .steps li:first-child { border-top: none; padding-top: 0; }
 .steps h3 { margin: 0 0 6px; font-size: 15px; }
+.steps .optional { font-weight: 400; font-size: 12px; color: var(--ash); margin-left: 6px; }
 .steps p { margin: 0 0 10px; font-size: 13px; color: var(--graphite); }
 .steps .result { font: 12px/1.5 var(--mono); color: var(--smoke); min-height: 1.4em; }
 .shot { position: relative; margin-bottom: 10px; border-radius: 12px; overflow: hidden; background: var(--taupe); }
