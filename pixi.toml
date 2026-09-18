@@ -113,6 +113,8 @@ CMAKE_PREFIX_PATH = "${CONDA_PREFIX}"
 ROS_DISTRO = "lyrical"
 PYTHONNOUSERSITE = "1"
 RMW_IMPLEMENTATION = "rmw_zenoh_cpp"
+# Gazebo looks for system plugins (gz_ros2_control) here; it does not search the env's lib dir.
+GZ_SIM_SYSTEM_PLUGIN_PATH = "${CONDA_PREFIX}/lib"
 # Nodes connect to the chessbot router rather than scouting for one.
 ZENOH_CONFIG_OVERRIDE = 'connect/endpoints=["tcp/127.0.0.1:7447"];scouting/multicast/enabled=false'
 
