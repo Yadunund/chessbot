@@ -98,10 +98,10 @@ class MotionNode(Node):
         # Full speed; callers ask for less through max_velocity_scaling_factor. Both limits
         # are what the simulated joints can actually follow - asking for more only makes the
         # arm lag behind its trajectory and abort on the goal-time tolerance.
-        self.max_joint_velocity = float(self.declare_parameter("max_joint_velocity", 0.8).value)
+        self.max_joint_velocity = float(self.declare_parameter("max_joint_velocity", 1.6).value)
         # Cartesian paths also respect a tool speed, so short joint steps do not add up to a
         # fast lunge near the pieces.
-        self.max_cartesian_speed = float(self.declare_parameter("max_cartesian_speed", 0.04).value)
+        self.max_cartesian_speed = float(self.declare_parameter("max_cartesian_speed", 0.08).value)
         self.accepted_frames = set(self.declare_parameter("accepted_frames", ["", "world", "base_link"]).value)
         self.max_approach_tilt_deg = float(self.declare_parameter("max_approach_tilt_deg", 25.0).value)
 

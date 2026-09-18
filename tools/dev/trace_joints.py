@@ -55,6 +55,7 @@ def report(samples, joints: list[str]):
     t = [s[0] for s in samples]
     print(f"{len(samples)} samples over {t[-1] - t[0]:.2f} s")
     print(f"{'joint':<22}{'lag mm/rad':>12}{'overshoot':>11}{'peak vel':>10}{'peak acc':>10}{'vel steps':>10}")
+    worst: list[tuple[float, int, str]] = []
     for j, name in enumerate(joints):
         reference = [s[1][j] for s in samples]
         feedback = [s[2][j] for s in samples]
@@ -71,6 +72,17 @@ def report(samples, joints: list[str]):
         steps = sum(1 for a in accel if abs(a) > 5.0)
         print(f"{name:<22}{lag:>12.4f}{overshoot:>11.4f}{max(abs(v) for v in velocity):>10.3f}"
               f"{max(abs(a) for a in accel):>10.2f}{steps:>10d}")
+        worst.append((max(abs(a) for a in accel), j, name))
+    if not worst:
+        return
+    # The joint that jerks hardest, in context: what was commanded and what happened.
+    _, j, name = max(worst)
+    peak = max(range(1, len(samples)), key=lambda i: abs(samples[i][3][j] - samples[i - 1][3][j]))
+    print(f"\naround the worst jerk ({name}, {samples[peak][0] - t[0]:.2f} s into the trace):")
+    print(f"{'t':>8}{'reference':>12}{'feedback':>12}{'velocity':>10}")
+    for i in range(max(0, peak - 6), min(len(samples), peak + 7)):
+        s = samples[i]
+        print(f"{s[0] - t[0]:>8.3f}{s[1][j]:>12.4f}{s[2][j]:>12.4f}{s[3][j]:>10.3f}")
 
 
 def main():

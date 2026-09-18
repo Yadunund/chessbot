@@ -109,7 +109,7 @@ class BrainNode(Node):
             gripper_closed=float(self.declare_parameter("gripper_closed", 0.05).value),
             pick_offset=float(self.declare_parameter("pick_offset", 0.010).value),
             place_offset=float(self.declare_parameter("place_offset", 0.0075).value),
-            joint_speed=float(self.declare_parameter("joint_speed", 0.8).value),
+            joint_speed=float(self.declare_parameter("joint_speed", 1.6).value),
         )
         zenoh_endpoint = self.declare_parameter("zenoh_endpoint", "tcp/127.0.0.1:7447").value
         default_stockfish = os.path.join(os.environ.get("PIXI_PROJECT_ROOT", ""), "generated", "bin", "stockfish")

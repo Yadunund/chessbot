@@ -22,6 +22,8 @@ from scipy.optimize import least_squares
 SEED_WEIGHT = 0.003
 # Largest joint move accepted between two interpolated points of a path, radians.
 MAX_JOINT_STEP = 0.12
+# How far inside its limits each joint is kept, radians.
+LIMIT_MARGIN = 0.05
 
 
 @dataclass
@@ -71,8 +73,11 @@ class ArmKinematics:
                 raise ValueError(f"unknown joint {name!r}")
             self.q_idx.append(self.model.joints[jid].idx_q)
             self.v_idx.append(self.model.joints[jid].idx_v)
-        self.lower = self.model.lowerPositionLimit[self.q_idx]
-        self.upper = self.model.upperPositionLimit[self.q_idx]
+        # Solutions are kept a little inside the joint limits. A joint commanded right at
+        # its limit sits there while the rest of the path moves on, and then snaps to its
+        # speed limit catching up (seen on wrist_flex at exactly 1.6 rad).
+        self.lower = self.model.lowerPositionLimit[self.q_idx] + LIMIT_MARGIN
+        self.upper = self.model.upperPositionLimit[self.q_idx] - LIMIT_MARGIN
         # The approach axis expressed in the tip frame is constant for a rigid tool.
         q0 = pin.neutral(self.model)
         pin.framesForwardKinematics(self.model, self.data, q0)
