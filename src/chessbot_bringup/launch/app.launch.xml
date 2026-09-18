@@ -19,8 +19,8 @@
   <arg name="rest_port" default="8000" />
   <arg name="calibration_file" default="$(env HOME)/.chessbot/calibration.yaml" />
   <arg name="llm_url" default="http://127.0.0.1:8081" description="llama-server serving the reasoning model (pixi run llm)." />
-  <arg name="joint_velocity" default="1.6" description="Top joint speed, rad/s." />
-  <arg name="cartesian_speed" default="0.08" description="Top tool speed along a path, m/s." />
+  <arg name="joint_velocity" default="0.8" description="Top joint speed, rad/s." />
+  <arg name="cartesian_speed" default="0.04" description="Top tool speed along a path, m/s." />
 
   <!-- Perception: camera frames in, board facts out on request. -->
   <load_composable_node target="$(var container)">

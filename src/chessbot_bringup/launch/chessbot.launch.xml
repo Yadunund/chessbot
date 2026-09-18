@@ -37,10 +37,14 @@
   <arg name="calibration_file" default="$(env HOME)/.chessbot/calibration.yaml" />
   <arg name="llm_url" default="http://127.0.0.1:8081" description="llama-server serving the reasoning model (pixi run llm)." />
 
-  <!-- The real arm is driven at a quarter of the simulated speed until motion has been
-       tuned against it; simulation is where we go fast. -->
-  <arg name="joint_velocity" default="$(eval '1.6 if &quot;$(var hardware)&quot; == &quot;gazebo&quot; else 0.4')" />
-  <arg name="cartesian_speed" default="$(eval '0.08 if &quot;$(var hardware)&quot; == &quot;gazebo&quot; else 0.02')" />
+  <!-- Measured, not chosen: at 1.6 rad/s and 8 cm/s a single transfer is twice as quick and
+       still lands within a millimetre, but the scenarios that move several pieces start
+       losing them - middlegame_capture passes at 0.8 and fails at 1.6, and en passant throws
+       the captured pawn off the table. Speed near the pieces is what costs; that is the thing
+       to separate out before raising this again. The real arm runs slower still until motion
+       has been tuned against it. -->
+  <arg name="joint_velocity" default="$(eval '0.8 if &quot;$(var hardware)&quot; == &quot;gazebo&quot; else 0.4')" />
+  <arg name="cartesian_speed" default="$(eval '0.04 if &quot;$(var hardware)&quot; == &quot;gazebo&quot; else 0.02')" />
 
   <!-- Only simulation has a clock to follow. -->
   <let name="use_sim_time" value="$(eval '&quot;$(var hardware)&quot; == &quot;gazebo&quot;')" />

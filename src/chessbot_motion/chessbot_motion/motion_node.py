@@ -95,9 +95,10 @@ class MotionNode(Node):
         # Direction the jaws open (fixed towards moving jaw) in tip_frame, measured with
         # tools/dev/gripper_geometry.py.
         self.opening_axis = list(self.declare_parameter("opening_axis", [-1.0, 0.0, 0.0]).value)
-        # Full speed; callers ask for less through max_velocity_scaling_factor. Both limits
-        # are what the simulated joints can actually follow - asking for more only makes the
-        # arm lag behind its trajectory and abort on the goal-time tolerance.
+        # Full speed; callers ask for less through max_velocity_scaling_factor. Doubling these
+        # halves the time for a single move and still places within a millimetre, but scenarios
+        # that move several pieces start losing them, so the limit is what the pieces tolerate
+        # rather than what the joints can follow.
         self.max_joint_velocity = float(self.declare_parameter("max_joint_velocity", 1.6).value)
         # Cartesian paths also respect a tool speed, so short joint steps do not add up to a
         # fast lunge near the pieces.
