@@ -54,7 +54,10 @@ pixi run -e llm llm     # terminal 2 (optional): Gemma 4 reasoning model on the 
 pixi run sim            # terminal 3: simulated robot, every chessbot component, Rerun viewer on :9090
 ```
 
-On the real SO-101, run `pixi run real` instead of `pixi run sim` (see [hardware setup](docs/hardware.md)).
+On the real SO-101, run `pixi run real` instead of `pixi run sim`, then press **Set up…** in the UI and
+follow the four steps: the arm shows the camera its own gripper, you click the board's corners, and it
+tells you whether every square is in reach (see [hardware setup](docs/hardware.md)). Simulation and the
+real robot are the same launch file, chosen with `hardware:=`.
 
 Open **`http://<host>:8000`**, choose your colour and strength, and press **New game**.
 
@@ -65,6 +68,7 @@ Open **`http://<host>:8000`**, choose your colour and strength, and press **New 
 | Check every connection in the stack | `pixi run check` |
 | Also play a short game automatically | `pixi run check --e2e --moves 4` |
 | Stop everything | `tools/dev/stop.sh` (add `--all` to stop the router) |
+| Drive the arm by hand | The **Robot** card: jog the tool, work the jaws, send it home |
 
 ## Playing
 
@@ -77,10 +81,18 @@ Open **`http://<host>:8000`**, choose your colour and strength, and press **New 
 
 ## Status
 
-The whole application runs in simulation: the robot reads your move from the camera, replies, moves the
-pieces and comments with Gemma. The real-robot stack (`pixi run real`) comes up end to end and is ready
-for the arm. Next up is refining it: motion tuning on hardware, move-reading accuracy, measuring the
-board's position automatically, and promotion piece swaps.
+The whole application runs in simulation: the robot reads your move from the camera (three moves out of
+three in the last run), replies, moves the pieces and comments with Gemma.
+
+On the real SO-101 the stack comes up end to end - driver, controllers, live joint states, the overhead
+camera streaming to Rerun - and the arm takes commanded moves. It has not picked a piece yet: that needs
+the setup workflow run on the rig first, since an uncalibrated arm does not know where the board is.
+
+Gemma's advice is only accepted when it can be shown to be reading the image: it is asked a decoy
+question about the same frame, and an answer that survives both is trusted. On the real board, in poor
+light, it did not survive, which is the point of asking.
+
+Next: tuning motion against the real arm, move-reading accuracy, and promotion piece swaps.
 
 ## Learn more
 
