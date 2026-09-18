@@ -270,6 +270,8 @@ class Draft:
     squareness_m: float | None = None
     park_joints: list[float] | None = None
     unreachable: list[str] = field(default_factory=list)
+    # Empty when the board is the right way round, otherwise what is wrong with it.
+    orientation: str = ""
 
     def steps(self) -> dict:
         """What is done and what is still needed, for the UI to render."""
@@ -286,6 +288,7 @@ class Draft:
                 "square_size_mm": round((self.square_size_m or 0.0) * 1000.0, 1),
                 "squareness_mm": round((self.squareness_m or 0.0) * 1000.0, 1),
             },
-            "reach": {"unreachable": list(self.unreachable)} if self.board_origin_xyz is not None else None,
+            "reach": {"unreachable": list(self.unreachable), "orientation": self.orientation}
+            if self.board_origin_xyz is not None else None,
             "park": None if self.park_joints is None else {"joints": [round(v, 4) for v in self.park_joints]},
         }

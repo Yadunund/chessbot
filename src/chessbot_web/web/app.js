@@ -353,14 +353,10 @@ function newPhoto() {
   $("setup-frame").src = `/api/camera/frame.png?scale=2&t=${Date.now()}`;
 }
 
-$("setup-frame").addEventListener("click", async (event) => {
-  if (corners.length >= 4) return;
-  const box = event.target.getBoundingClientRect();
-  // Percentages, so the marks follow the image however it is scaled; the server is told
-  // pixels in the full size frame.
-  corners.push([((event.clientX - box.left) / box.width) * 100, ((event.clientY - box.top) / box.height) * 100]);
-  drawCorners();
-  if (corners.length < 4) return;
+// a1 is defined from White's seat, but the corners are marked on a photograph taken from
+// somewhere else, so marking the board half a turn out is easy and looks identical. The
+// server judges it by which end the robot sits at; this puts it right without re-clicking.
+async function sendCorners() {
   const natural = { w: $("setup-frame").naturalWidth, h: $("setup-frame").naturalHeight };
   const scale = Number(new URL($("setup-frame").src, location.origin).searchParams.get("scale") || 1);
   const pixels = corners.map(([x, y]) => [(x / 100) * natural.w * scale, (y / 100) * natural.h * scale]);
@@ -374,10 +370,30 @@ $("setup-frame").addEventListener("click", async (event) => {
   const board = data.board || {};
   const reach = data.reach || {};
   const outOfReach = (reach.unreachable || []).length;
+  $("setup-rotate").hidden = !reach.orientation;
   $("board-result").textContent =
+    (reach.orientation ? `${reach.orientation} ` : "") +
     `${board.square_size_mm} mm squares, turned ${board.yaw_deg}°, corners off by ${board.squareness_mm} mm. ` +
     `Measure a square: if it is not ${board.square_size_mm} mm, the height above is wrong. ` +
     (outOfReach ? `${outOfReach} squares out of reach — move the board closer.` : "Every square is reachable.");
+}
+
+$("setup-rotate").addEventListener("click", () => {
+  // The same four corners, relabelled: what was marked h8 becomes a1.
+  corners.push(corners.shift(), corners.shift());
+  drawCorners();
+  sendCorners();
+});
+
+$("setup-frame").addEventListener("click", async (event) => {
+  if (corners.length >= 4) return;
+  const box = event.target.getBoundingClientRect();
+  // Percentages, so the marks follow the image however it is scaled; the server is told
+  // pixels in the full size frame.
+  corners.push([((event.clientX - box.left) / box.width) * 100, ((event.clientY - box.top) / box.height) * 100]);
+  drawCorners();
+  if (corners.length < 4) return;
+  await sendCorners();
 });
 
 $("setup-refresh").addEventListener("click", newPhoto);

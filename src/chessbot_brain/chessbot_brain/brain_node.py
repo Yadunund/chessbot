@@ -693,6 +693,7 @@ class BrainNode(Node):
         self.draft.square_size_m = board.square_size_m
         self.draft.squareness_m = board.squareness_m
         self.draft.unreachable = self.unreachable_squares(board.origin_xyz, board.yaw_rad, board.square_size_m)
+        self.draft.orientation = self.orientation_check(board.origin_xyz, board.yaw_rad, board.square_size_m)
         self.think(
             Thought.VERIFY,
             f"Board at {tuple(round(v, 3) for v in board.origin_xyz)}, "
@@ -700,6 +701,24 @@ class BrainNode(Node):
             f"{len(self.draft.unreachable)} squares out of reach.",
         )
         return self.draft.steps()
+
+    def orientation_check(self, origin_xyz, yaw_rad: float, square_size_m: float) -> str:
+        """Whether the board is the right way round, judged by which end the robot sits at.
+
+        a1 is defined from White's seat, but the corners are marked on a photograph taken from
+        somewhere else entirely, so it is easy to mark the board a half turn out. Nothing in the
+        image says which way round it is - a board rotated 180 degrees still covers exactly the
+        same squares - but the robot knows which colour it plays, and its own back rank has to
+        be the end nearest it.
+        """
+        centres = calib.square_centres(origin_xyz, yaw_rad, square_size_m)
+        near_rank_1 = min(math.hypot(*centres[f"{f}1"][:2]) for f in "abcdefgh")
+        near_rank_8 = min(math.hypot(*centres[f"{f}8"][:2]) for f in "abcdefgh")
+        robot_back_rank_is_near = near_rank_8 < near_rank_1 if self.robot_side == "black" else near_rank_1 < near_rank_8
+        if robot_back_rank_is_near:
+            return ""
+        return (f"The robot plays {self.robot_side}, so rank {8 if self.robot_side == 'black' else 1} should be "
+                "the end nearest it, and it is not. The corners are probably marked half a turn out.")
 
     def unreachable_squares(self, origin_xyz, yaw_rad: float, square_size_m: float) -> list[str]:
         """Which squares the arm cannot reach, at the height it grasps a piece."""
