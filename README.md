@@ -45,19 +45,32 @@
 
 Runs on Linux (x86-64) with [pixi](https://pixi.sh). Simulation needs no hardware.
 
+Once, to set the workspace up:
+
 ```bash
 pixi run build          # fetch pinned sources and build the workspace
-pixi run stockfish      # build the Stockfish engine
-
-pixi run router         # terminal 1: message router
-pixi run -e llm llm     # terminal 2 (optional): Gemma 4 reasoning model on the GPU
-pixi run sim            # terminal 3: simulated robot, every chessbot component, Rerun viewer on :9090
+pixi run stockfish      # build the Stockfish engine (without it the robot plays by no rules)
 ```
 
-On the real SO-101, run `pixi run real` instead of `pixi run sim`, then press **Set up…** in the UI and
-follow the four steps: the arm shows the camera its own gripper, you click the board's corners, and it
-tells you whether every square is in reach (see [hardware setup](docs/hardware.md)). Simulation and the
-real robot are the same launch file, chosen with `hardware:=`.
+Then, each session - one process per terminal, so you can see what is running:
+
+```bash
+pixi run router         # message router (exactly one, ever)
+pixi run -e llm llm     # optional: Gemma 4 reasoning model on the GPU
+pixi run sim            # simulated robot, every chessbot component, Rerun viewer on :9090
+```
+
+On the real SO-101, run `pixi run real` instead of `pixi run sim`, passing whatever differs from the
+defaults:
+
+```bash
+pixi run real usb_port:=/dev/ttyACM0 wrist_camera:=false overhead_device:=/dev/video0
+```
+
+Then press **Set up…** in the UI and follow the four steps: the arm shows the camera its own gripper,
+you click the board's corners, and it tells you whether every square is in reach (see
+[hardware setup](docs/hardware.md)). Until that is done the robot does not know where the board is, so
+it cannot pick a piece. Simulation and the real robot are the same launch file, chosen with `hardware:=`.
 
 Open **`http://<host>:8000`**, choose your colour and strength, and press **New game**.
 
@@ -69,6 +82,8 @@ Open **`http://<host>:8000`**, choose your colour and strength, and press **New 
 | Also play a short game automatically | `pixi run check --e2e --moves 4` |
 | Stop everything | `tools/dev/stop.sh` (add `--all` to stop the router) |
 | Drive the arm by hand | The **Robot** card: jog the tool, work the jaws, send it home |
+| Find the arm on its bus, before blaming the driver | `pixi run python tools/dev/ping_servos.py /dev/ttyACM0` |
+| See what is holding a serial port | `fuser -v /dev/ttyACM0` |
 
 ## Playing
 
@@ -106,6 +121,8 @@ accuracy.
 - [Hardware](docs/hardware.md): running on the real SO-101
 - [Interfaces](docs/interfaces.md): every boundary and its type
 - [Skills](src/chessbot_brain/skills/README.md): the robot's actions and their contracts
+- [Agent skills](.claude/skills): the reusable parts of the method - bringing a rig up, calibrating
+  it without markers, guarding a model that guesses, and measuring in simulation
 - [Licensing](docs/licensing.md): dependency policy
 
 ## License
