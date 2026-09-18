@@ -629,7 +629,7 @@ class BrainNode(Node):
 
             samples = []
             self.caps.gripper(self.caps.arm.gripper_closed)
-            for target in calib.CAMERA_SAMPLES:
+            for target in self.camera_sample_poses():
                 try:
                     solution = self.caps.solve_ik(target, tool_down(0.0))
                 except CapabilityError:
@@ -663,6 +663,24 @@ class BrainNode(Node):
                                        f"fit {model.error_mean_px:.0f} px mean over {len(kept)} poses.")
         finally:
             self.set_phase(previous)
+
+    def camera_sample_poses(self) -> list[tuple[float, float, float]]:
+        """Where to hold the gripper so the camera can see it.
+
+        Over the board, once the board is known. The camera is aimed at the board, not at the
+        robot, so poses picked in the robot's own frame can sit entirely outside the picture -
+        the arm moves, the gripper never appears, and every sample is thrown away. Squares are
+        somewhere the camera is certainly looking, spread wide enough to pin a pose down.
+        """
+        geometry = self.geometry_if_calibrated()
+        if geometry is None:
+            return list(calib.CAMERA_SAMPLES)
+        out = []
+        for height in calib.CAMERA_SAMPLE_HEIGHTS:
+            for square in ("a1", "h1", "a8", "h8", "d4", "e5"):
+                x, y, z = geometry.square_centre(square)
+                out.append((x, y, z + height))
+        return out
 
     def camera_model(self) -> calib.CameraModel:
         """The camera to measure the board against.

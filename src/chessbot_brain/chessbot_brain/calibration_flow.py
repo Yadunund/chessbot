@@ -35,6 +35,9 @@ import numpy as np
 DEFAULT_FOCAL_PX = 907.0
 # Tool-down poses used to show the camera the gripper. Kept low, because a short arm cannot
 # hold the tool down much higher, and inside the same safe box as manual control.
+# Heights above the playing surface to hold the gripper at, when sampling over a known board.
+CAMERA_SAMPLE_HEIGHTS = (0.08, 0.12)
+# Fallback poses in the robot's own frame, for a rig whose board is not marked yet.
 CAMERA_SAMPLES = [
     (0.16, -0.10, 0.08), (0.16, 0.10, 0.08), (0.20, -0.06, 0.08), (0.20, 0.06, 0.08),
     (0.23, -0.07, 0.08), (0.23, 0.07, 0.08), (0.20, -0.06, 0.11), (0.20, 0.06, 0.11),
