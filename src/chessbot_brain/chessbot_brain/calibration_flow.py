@@ -204,11 +204,23 @@ class BoardFromCorners:
     side_lengths_m: tuple[float, float, float, float]
 
 
-def board_from_corners(camera: CameraModel, corners) -> BoardFromCorners | None:
-    """Back-project four marked corners onto the table and read off the board's pose."""
+def board_from_corners(camera: CameraModel, corners, surface_height_m: float = 0.0) -> BoardFromCorners | None:
+    """Back-project four marked corners onto the playing surface and read off the board's pose.
+
+    `surface_height_m` is how far the squares sit above the table, which for a folding board
+    is the thickness of its case. It matters twice over, and getting it wrong is not obvious:
+    the corners are back-projected onto that plane, so assuming the table pushes the board
+    outwards from under the camera and inflates the square size; and the stored origin carries
+    the height the arm descends to, so an arm told the squares are on the table drives its
+    gripper into a board that is two centimetres higher.
+
+    Projecting the result back onto the image cannot catch this - back-projecting to the wrong
+    plane and projecting back through the same camera is self consistent, and the overlay looks
+    perfect either way. Only a ruler, or the arm touching the surface, can tell.
+    """
     points = []
     for pixel in corners:
-        point = camera.on_plane(pixel)
+        point = camera.on_plane(pixel, surface_height_m)
         if point is None:
             return None
         points.append(np.array(point, float))
@@ -216,13 +228,14 @@ def board_from_corners(camera: CameraModel, corners) -> BoardFromCorners | None:
         return None
 
     a1, h1, h8, a8 = points
+    height = float(a1[2])
     x_axis = ((h1 - a1) + (h8 - a8)) / 2.0
     y_axis = ((a8 - a1) + (h8 - h1)) / 2.0
     sides = (float(np.linalg.norm(h1 - a1)), float(np.linalg.norm(h8 - h1)),
              float(np.linalg.norm(a8 - h8)), float(np.linalg.norm(a1 - a8)))
     board_size = (float(np.linalg.norm(x_axis)) + float(np.linalg.norm(y_axis))) / 2.0
     return BoardFromCorners(
-        origin_xyz=(float(a1[0]), float(a1[1]), 0.0),
+        origin_xyz=(float(a1[0]), float(a1[1]), height),
         yaw_rad=float(math.atan2(x_axis[1], x_axis[0])),
         square_size_m=board_size / 8.0,
         squareness_m=float(max(sides) - min(sides)),

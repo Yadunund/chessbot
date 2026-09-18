@@ -129,6 +129,11 @@
             <h3>1. Mark the board</h3>
             <p>Click the board's four outer corners in this order:
               <strong>a1, h1, h8, a8</strong>. a1 is the square to the left of the white pieces.</p>
+            <label class="field">How far the squares sit above the table, mm
+              <input id="board-height" type="number" min="0" max="80" step="1" value="0" />
+              <span class="note">A folding board's case, or anything it rests on. Getting this
+                wrong moves the whole board and makes the arm reach through it.</span>
+            </label>
             <div class="shot">
               <img id="setup-frame" alt="Overhead camera" />
               <svg id="setup-marks" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>

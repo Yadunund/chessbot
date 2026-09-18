@@ -364,8 +364,10 @@ $("setup-frame").addEventListener("click", async (event) => {
   const natural = { w: $("setup-frame").naturalWidth, h: $("setup-frame").naturalHeight };
   const scale = Number(new URL($("setup-frame").src, location.origin).searchParams.get("scale") || 1);
   const pixels = corners.map(([x, y]) => [(x / 100) * natural.w * scale, (y / 100) * natural.h * scale]);
+  const height = Number($("board-height").value || 0) / 1000;
   const res = await fetch("/api/calibration/board", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ corners: pixels }),
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ corners: pixels, surface_height_m: height }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) { $("board-result").textContent = data.detail || "Could not use those corners."; return; }
@@ -374,6 +376,7 @@ $("setup-frame").addEventListener("click", async (event) => {
   const outOfReach = (reach.unreachable || []).length;
   $("board-result").textContent =
     `${board.square_size_mm} mm squares, turned ${board.yaw_deg}°, corners off by ${board.squareness_mm} mm. ` +
+    `Measure a square: if it is not ${board.square_size_mm} mm, the height above is wrong. ` +
     (outOfReach ? `${outOfReach} squares out of reach — move the board closer.` : "Every square is reachable.");
 });
 

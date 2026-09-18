@@ -683,9 +683,9 @@ class BrainNode(Node):
         focal_px = centre[2] if centre and centre[2] > 100.0 else calib.DEFAULT_FOCAL_PX
         return calib.CameraModel(position=position, rpy=rpy, focal_px=focal_px, centre_px=centre_px)
 
-    def calibration_board(self, corners) -> dict:
+    def calibration_board(self, corners, surface_height_m: float = 0.0) -> dict:
         """The board pose implied by four corners marked in the camera image (a1, h1, h8, a8)."""
-        board = calib.board_from_corners(self.camera_model(), corners)
+        board = calib.board_from_corners(self.camera_model(), corners, surface_height_m)
         if board is None:
             raise CapabilityError("those corners do not point at the table")
         self.draft.board_origin_xyz = board.origin_xyz
@@ -823,6 +823,8 @@ class BoardCorners(BaseModel):
     """The board's four outer corners in the camera image, in the order a1, h1, h8, a8."""
 
     corners: list[list[float]]
+    # How far the squares sit above the table: the thickness of a folding board's case.
+    surface_height_m: float = 0.0
 
 
 def build_app(node: BrainNode) -> FastAPI:
@@ -935,7 +937,8 @@ def build_app(node: BrainNode) -> FastAPI:
         if len(body.corners) != 4:
             raise HTTPException(status_code=422, detail="give four corners: a1, h1, h8, a8")
         try:
-            return node.calibration_board([(float(c[0]), float(c[1])) for c in body.corners])
+            return node.calibration_board([(float(c[0]), float(c[1])) for c in body.corners],
+                                          float(body.surface_height_m))
         except CapabilityError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
