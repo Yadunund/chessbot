@@ -69,6 +69,9 @@ ros-lyrical-rmw-zenoh-cpp = "*"
 ros-lyrical-robot-state-publisher = "*"
 ros-lyrical-tf2-ros = "*"
 ros-lyrical-control-msgs = "*"
+# The Rerun bridge logs these as spatial archetypes (paths, occupancy grids, markers).
+ros-lyrical-nav-msgs = "*"
+ros-lyrical-visualization-msgs = "*"
 ros-lyrical-moveit-msgs = "*"
 ros-lyrical-vision-msgs = "*"
 # ros2_control
