@@ -38,6 +38,28 @@ from chessbot_motion.kinematics import ArmKinematics
 
 TOOL_X = np.array([1.0, 0.0, 0.0])
 TOOL_Z = np.array([0.0, 0.0, 1.0])
+# A smoothstep's speed peaks at 1.5 times its average, so a path timed along one takes
+# that much longer than the same path driven flat out at the speed limit.
+SMOOTH_STRETCH = 1.5
+# Even a tiny correction gets a full ease in and out rather than a twitch.
+MIN_DURATION = 0.5
+
+
+def _smoothstep_time(fraction: float) -> float:
+    """Time (as a fraction of the total) at which a smoothstep covers `fraction` of the path.
+
+    The inverse of s(u) = 3u^2 - 2u^3, which is monotone on [0, 1], by bisection.
+    """
+    low, high = 0.0, 1.0
+    for _ in range(40):
+        mid = 0.5 * (low + high)
+        if 3.0 * mid * mid - 2.0 * mid * mid * mid < fraction:
+            low = mid
+        else:
+            high = mid
+    return 0.5 * (low + high)
+
+
 
 
 def quat_to_matrix(q) -> np.ndarray:
@@ -73,6 +95,9 @@ class MotionNode(Node):
         # Direction the jaws open (fixed towards moving jaw) in tip_frame, measured with
         # tools/dev/gripper_geometry.py.
         self.opening_axis = list(self.declare_parameter("opening_axis", [-1.0, 0.0, 0.0]).value)
+        # Full speed; callers ask for less through max_velocity_scaling_factor. Both limits
+        # are what the simulated joints can actually follow - asking for more only makes the
+        # arm lag behind its trajectory and abort on the goal-time tolerance.
         self.max_joint_velocity = float(self.declare_parameter("max_joint_velocity", 0.8).value)
         # Cartesian paths also respect a tool speed, so short joint steps do not add up to a
         # fast lunge near the pieces.
@@ -165,24 +190,51 @@ class MotionNode(Node):
 
         response.start_state.joint_state.name = list(self.joint_names)
         response.start_state.joint_state.position = [float(v) for v in start]
-        response.solution.joint_trajectory = self._timed_trajectory(configs, kin)
+        response.solution.joint_trajectory = self._timed_trajectory(configs, kin, request.max_velocity_scaling_factor)
         response.fraction = float(fraction)
         response.error_code.val = MoveItErrorCodes.SUCCESS if fraction > 0.0 else MoveItErrorCodes.NO_IK_SOLUTION
         return response
 
-    def _timed_trajectory(self, configs: list[np.ndarray], kin: ArmKinematics) -> JointTrajectory:
-        """Time each step by the slower of the largest joint move and the tool's travel."""
+    def _timed_trajectory(self, configs: list[np.ndarray], kin: ArmKinematics, scale: float = 1.0) -> JointTrajectory:
+        """Time the path so it eases in and out, and state the velocity at every point.
+
+        Each step needs at least as long as the slower of its largest joint move and its
+        tool travel. Spending exactly that everywhere gives a square velocity pulse: the
+        arm jumps to full speed, which is what jerks the pieces. So the same path is timed
+        along a smoothstep, whose speed starts and ends at zero and peaks at 1.5 times the
+        average - hence the same factor of stretch, to stay inside the speed limits.
+
+        Only the timing is changed. Stating a velocity at each point instead would let the
+        controller spline between them, but consecutive waypoints are separate IK solutions
+        and a small jump between two of them becomes a large velocity, which threw a piece
+        across the table. The uneven spacing alone gives the ramp.
+
+        `scale` is the request's max_velocity_scaling_factor; unset (0.0) means full speed.
+        """
+        scale = 1.0 if scale <= 0.0 else min(scale, 1.0)
+        joint_velocity = self.max_joint_velocity * scale
+        cartesian_speed = self.max_cartesian_speed * scale
+
+        # Time each segment at the limits, and the fraction of the whole path at each point.
+        steps = []
+        for i in range(1, len(configs)):
+            joint_time = float(np.max(np.abs(configs[i] - configs[i - 1]))) / joint_velocity
+            travel = float(np.linalg.norm(kin.forward(configs[i])[0] - kin.forward(configs[i - 1])[0]))
+            steps.append(max(1e-4, joint_time, travel / cartesian_speed))
+        straight = sum(steps)
+        total = SMOOTH_STRETCH * max(straight, MIN_DURATION)
+        elapsed, fractions = 0.0, [0.0]
+        for step in steps:
+            elapsed += step
+            fractions.append(elapsed / straight if straight > 0.0 else 1.0)
+
+        times = [total * _smoothstep_time(f) for f in fractions]
         traj = JointTrajectory()
         traj.joint_names = list(self.joint_names)
-        t = 0.0
         for i, q in enumerate(configs):
-            if i > 0:
-                joint_time = float(np.max(np.abs(q - configs[i - 1]))) / self.max_joint_velocity
-                travel = float(np.linalg.norm(kin.forward(q)[0] - kin.forward(configs[i - 1])[0]))
-                t += max(0.02, joint_time, travel / self.max_cartesian_speed)
             point = JointTrajectoryPoint()
             point.positions = [float(v) for v in q]
-            point.time_from_start = Duration(sec=int(t), nanosec=int((t - int(t)) * 1e9))
+            point.time_from_start = Duration(sec=int(times[i]), nanosec=int((times[i] % 1.0) * 1e9))
             traj.points.append(point)
         return traj
 

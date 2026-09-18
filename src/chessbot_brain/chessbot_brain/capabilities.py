@@ -261,14 +261,20 @@ class Capabilities:
         return response.solution.joint_trajectory
 
     def joint_move_trajectory(self, target: list[float]) -> JointTrajectory:
-        """A two-point trajectory to a joint target, timed at the configured speed."""
+        """A two-point trajectory to a joint target, timed at the configured speed.
+
+        Both points state a velocity of zero, so the controller interpolates a cubic and
+        the arm eases in and out instead of jumping to speed. That costs half again as
+        long, since such a profile peaks at 1.5 times its average speed.
+        """
         current = self.joint_positions()
         travel = max(abs(a - b) for a, b in zip(current, target))
-        duration = max(0.4, travel / self.arm.joint_speed)
+        duration = 1.5 * max(1.0, travel / self.arm.joint_speed)
+        zero = [0.0] * len(self.arm.joints)
         trajectory = JointTrajectory()
         trajectory.joint_names = list(self.arm.joints)
-        start = JointTrajectoryPoint(positions=current, time_from_start=Duration(seconds=0.0).to_msg())
-        end = JointTrajectoryPoint(positions=list(target), time_from_start=Duration(seconds=duration).to_msg())
+        start = JointTrajectoryPoint(positions=current, velocities=list(zero), time_from_start=Duration(seconds=0.0).to_msg())
+        end = JointTrajectoryPoint(positions=list(target), velocities=list(zero), time_from_start=Duration(seconds=duration).to_msg())
         trajectory.points = [start, end]
         return trajectory
 

@@ -145,7 +145,10 @@
     <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
       <parameters>$(arg controllers_file)</parameters>
       <!-- How hard joints are driven towards position commands. The default (0.1) is soft
-           enough that the arm sags under gravity at full reach. -->
+           enough that the arm sags under gravity at full reach. This also caps how fast
+           the simulated arm can follow a trajectory (roughly gain x tracking error, in
+           rad/s): raising it to 20 made the arm lunge and drive the gripper into the
+           table, so faster motion needs tuning against the real servos, not this. -->
       <position_proportional_gain>1.0</position_proportional_gain>
     </plugin>
   </gazebo>

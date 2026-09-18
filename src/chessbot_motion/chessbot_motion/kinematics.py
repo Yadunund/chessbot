@@ -16,6 +16,13 @@ import numpy as np
 import pinocchio as pin
 from scipy.optimize import least_squares
 
+# How hard a path's solutions are pulled towards the previous one, in metres per radian.
+# Small next to the millimetre position tolerance, so it settles the null space without
+# moving the tool.
+SEED_WEIGHT = 0.003
+# Largest joint move accepted between two interpolated points of a path, radians.
+MAX_JOINT_STEP = 0.12
+
 
 @dataclass
 class IkResult:
@@ -100,11 +107,18 @@ class ArmKinematics:
         pin.framesForwardKinematics(self.model, self.data, q)
         return pin.SE3(self.data.oMf[self.tip])
 
-    def _residual(self, q_chain, target_position, target_approach, weight, target_opening=None):
+    def _residual(self, q_chain, target_position, target_approach, weight, target_opening=None,
+                  seed=None, seed_weight=0.0):
         position, approach, opening = self.forward_full(q_chain)
         parts = [position - target_position, weight * (approach - target_approach)]
         if target_opening is not None:
             parts.append(weight * (opening - target_opening))
+        if seed is not None and seed_weight > 0.0:
+            # The arm has a null space, so many configurations reach the same tool pose.
+            # This term picks the one nearest the seed, which keeps consecutive points of a
+            # path in the same solution branch. Weighted in metres per radian, so it stays
+            # well below the position tolerance.
+            parts.append(seed_weight * (q_chain - seed))
         return np.concatenate(parts)
 
     @staticmethod
@@ -127,6 +141,7 @@ class ArmKinematics:
         weights: tuple[float, ...] = (0.3, 0.1, 0.03, 0.01),
         max_evaluations: int = 300,
         target_opening: np.ndarray | None = None,
+        seed_weight: float = 0.0,
     ) -> IkResult:
         """Bounded least squares on position and approach direction from one seed.
 
@@ -149,7 +164,7 @@ class ArmKinematics:
                 self._residual,
                 x0,
                 bounds=(self.lower, self.upper),
-                args=(target_position, target_approach, weight, target_opening),
+                args=(target_position, target_approach, weight, target_opening, x0, seed_weight),
                 method="trf",
                 xtol=1e-10,
                 ftol=1e-10,
@@ -252,8 +267,20 @@ class ArmKinematics:
                     o = o1 if o0 is None else (1 - s) * o0 + s * o1
                     o = o / np.linalg.norm(o)
                 result = self.solve(
-                    p, a, configs[-1], approach_tolerance_rad=self.max_approach_tilt_rad, target_opening=o
+                    p, a, configs[-1], approach_tolerance_rad=self.max_approach_tilt_rad, target_opening=o,
+                    seed_weight=SEED_WEIGHT,
                 )
+                # A step of a few millimetres that turns into a large joint move means the
+                # solver crossed into another branch of the null space. Following it makes
+                # the joint slam to its speed limit, so pull harder towards the previous
+                # configuration and give up on the path if that does not help.
+                if result.success and float(np.max(np.abs(result.q - configs[-1]))) > MAX_JOINT_STEP:
+                    result = self.solve(
+                        p, a, configs[-1], approach_tolerance_rad=self.max_approach_tilt_rad, target_opening=o,
+                        seed_weight=SEED_WEIGHT * 20.0,
+                    )
+                    if float(np.max(np.abs(result.q - configs[-1]))) > MAX_JOINT_STEP:
+                        return configs, (done + (i - 1) / steps * length) / total if total > 0 else 0.0
                 if not result.success:
                     return configs, (done + (i - 1) / steps * length) / total if total > 0 else 0.0
                 configs.append(result.q)
