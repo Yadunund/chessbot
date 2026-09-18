@@ -255,6 +255,9 @@ def main():
     parser.add_argument("--closed", type=float, default=0.02)
     parser.add_argument("--out", default="/tmp/extrinsics.png")
     parser.add_argument("--dry-run", action="store_true", help="print the sample poses and stop")
+    parser.add_argument("--rest", type=float, nargs=3, metavar=("X", "Y", "Z"),
+                        help="move the tool to this point and exit, e.g. somewhere low and clear "
+                             "before shutting the stack down")
     parser.add_argument("--probe", action="store_true",
                         help="ask IK which sample poses are reachable, without moving the arm")
     parser.add_argument("--height", type=float, nargs="*", help="override the sample heights, metres")
@@ -276,6 +279,15 @@ def main():
     threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
     rig = Rig(node, args.speed)
     rig.wait_ready()
+
+    if args.rest:
+        target = clamp(tuple(args.rest))
+        solution = rig.solve_ik(target)
+        if solution is None:
+            print(f"{target}: no IK")
+            return 1
+        print(f"moving to {target}: {'reached' if rig.move_to(solution) else 'failed'}")
+        return 0
 
     if args.probe:
         for xyz in samples:

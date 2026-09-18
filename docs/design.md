@@ -90,12 +90,12 @@ storage that acts as a shared key-value store.
 | Reasoning | `chessbot_inference` | Python | Serves the `Reason` service from Gemma 4 in `llama-server`, on this host or another. Advises; never decides. |
 | Motion | `chessbot_motion` | Python | IK and Cartesian paths behind MoveIt's standard services, using Pinocchio. |
 | Control | ros2_control | C++ | `joint_trajectory_controller` for the arm, `parallel_gripper_action_controller` for the gripper, `joint_state_broadcaster`. Gazebo, mock or real hardware behind the same controllers. |
-| Calibration | `chessbot_calibration` | Python | Where the board is relative to the robot. Loads YAML from disk, primes the key-value store, runs the `Calibrate` action (measurement stages are stubs). |
+| Calibration | `chessbot_calibration` | Python | Owns where the board is relative to the robot: loads the YAML profile, primes the key-value store, and stores measurements taken by the guided workflow (`SetCalibration`). |
 | Recording | [`rerun_ros_bridge`](https://github.com/Yadunund/rerun_ros_bridge) (external) | C++ | Generic ROS 2 → Rerun bridge in its own repository, pinned in `chessbot.repos`. Streams to the Rerun viewer over gRPC, and archives to `.rrd` when asked. |
 | UI | `chessbot_web` | JS | Plain HTML, CSS and JavaScript, no build step. three.js for the 3D view. |
 | Description | `chessbot_description` | URDF | SO-101 with overhead and wrist cameras, ros2_control tags, simulation world. |
 | Bringup | `chessbot_bringup` | XML launch | Launch files and configuration. |
-| Interfaces | `chessbot_interfaces` | IDL | `GameState`, `Thought`, `BoardState`, `GetBoardState`, `Calibrate`. |
+| Interfaces | `chessbot_interfaces` | IDL | `GameState`, `Thought`, `BoardState`, `GetBoardState`, `Reason`, `SetCalibration`, `Calibrate`. |
 
 ## The brain
 
@@ -246,7 +246,7 @@ No extra bridge process is involved:
 
 [`rerun_ros_bridge`](https://github.com/Yadunund/rerun_ros_bridge) lives in its own repository, since nothing in it is chessbot-specific; its README describes its architecture. It runs in the same container as the cameras, so frames reach it by pointer.
 
-- It serves a gRPC stream that the stock Rerun web or native viewer connects to. `sim.launch.xml`
+- It serves a gRPC stream that the stock Rerun web or native viewer connects to. `app.launch.xml`
   starts the viewer through the bridge's `viewer.launch.xml` (`viewer:=web|native|none`), and the
   UI's **Debug view** button opens the web viewer in a new tab.
 - It logs the robot model (URDF through Rerun's importer, moved by `/tf`), images (with encoding
@@ -308,10 +308,43 @@ publishing them as a planning scene for collision-aware planning is a small step
 
 ## Real hardware
 
-`real.launch.xml` brings up the same application (`app.launch.xml`) on the real SO-101:
-`ros2_control` with `feetech_ros2_driver`, and `usb_cam` components for the overhead and wrist cameras in
-the io container, so frames still reach perception and the Rerun bridge by pointer. `hardware:=mock` runs
-the whole stack without the arm. Setup: [hardware.md](hardware.md).
+There is one launch file. `chessbot.launch.xml` brings up the application (`app.launch.xml`) over a
+robot (`robot.launch.xml`), and `hardware` chooses what that robot is:
+
+| `hardware:=` | The robot layer is |
+|---|---|
+| `gazebo` | Gazebo, which runs `ros2_control` itself through the plugin in the description, plus simulated cameras |
+| `real` | `ros2_control` with `feetech_ros2_driver` over USB, plus `usb_cam` components for the cameras |
+| `mock` | `ros2_control`'s mock hardware: no arm, no cameras, for checking an installation |
+
+Everything above the robot is identical in all three, `use_sim_time` follows from the same flag, and the
+cameras load into the io container either way, so frames reach perception and the Rerun bridge by
+pointer. The real arm runs at a quarter of the simulated speed until motion has been tuned against it.
+
+### Calibrating a rig
+
+Nothing about a real rig can be assumed: the camera is mounted wherever it fits and the board is put
+wherever there is room. So calibration is a guided workflow in the UI rather than a routine in the
+code, and it interleaves what only the arm can measure with what only the person can say:
+
+1. **The camera**, from the arm. The tool visits a dozen poses and opens its jaws at each. The jaws
+   are the only thing that moves between two frames, so differencing them locates the gripper in the
+   image without any marker, and a pinhole pose is fitted to where the gripper measurably was. The
+   focal length is held fixed, because the poses a short arm can hold are nearly coplanar and a free
+   focal length trades against the camera's height.
+2. **The board**, from the person: they click its four corners in the photograph. Those pixels
+   back-project onto the table plane, giving origin, rotation and square size. How far the four sides
+   are from equal is reported as the check on both the clicks and the camera fit.
+3. **Reach**, from IK: every square at grasping height, so a board out of reach is a sentence on
+   screen rather than an arm straining at it.
+4. **The park pose**, from the person: they jog the arm somewhere clear and save it.
+
+The brain measures, because it already talks to the arm and the camera; the calibration node stores,
+because it owns the profile and the key-value store everything else reads (`SetCalibration`).
+
+The same Robot card jogs the tool in 5-20 mm steps and works the jaws, clamped into a box above the
+table and within reach, since an uncalibrated rig has no idea where the board is. Setup:
+[hardware.md](hardware.md).
 
 ## Deployment and compute
 

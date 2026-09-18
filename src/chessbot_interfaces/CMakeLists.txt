@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/Thought.msg
   srv/GetBoardState.srv
   srv/Reason.srv
+  srv/SetCalibration.srv
   action/Calibrate.action
   DEPENDENCIES std_msgs builtin_interfaces sensor_msgs
 )

@@ -98,8 +98,8 @@ function renderState() {
   $("clock").disabled = !yourTurn;
   $("move").disabled = !yourTurn;
   $("new-game").disabled = busy;
-  $("calibrate").disabled = busy;
   $("park").disabled = busy;
+  for (const button of document.querySelectorAll("#jog button, #setup-camera")) button.disabled = busy;
   $("resume").disabled = state.phase !== "needs_help" || busy;
   $("clock-label").textContent = state.phase === "human_turn" ? "Your clock" : "Robot's clock";
   renderClock(humanSide);
@@ -266,13 +266,127 @@ $("new-game").addEventListener("click", () => {
     engine_elo: Number($("strength").value),
   });
 });
-$("calibrate").addEventListener("click", () => post("/api/calibrate"));
 $("park").addEventListener("click", () => post("/api/park"));
 $("resume").addEventListener("click", () => post("/api/resume"));
 $("demo").addEventListener("click", () =>
   post("/api/demo_transfer", { src: $("demo-src").value.trim(), dst: $("demo-dst").value.trim() }));
 $("debug-view").addEventListener("click", () =>
   window.open(`${VIEWER}/?url=${encodeURIComponent(RERUN_GRPC)}`, "_blank", "noopener"));
+
+// --- driving the arm by hand -----------------------------------------------------------
+//
+// For bringing a real rig up: before anything is calibrated the arm still has to be moved
+// around, and the only safe way to do that is in small steps you can watch.
+
+async function refreshToolPose() {
+  try {
+    const res = await fetch("/api/dev/tool_pose");
+    if (!res.ok) { $("tool-pose").textContent = "tool —"; return; }
+    const pose = await res.json();
+    const [x, y, z] = pose.xyz;
+    $("tool-pose").textContent = `tool ${(x * 100).toFixed(1)}, ${(y * 100).toFixed(1)}, ${(z * 100).toFixed(1)} cm`;
+  } catch {
+    $("tool-pose").textContent = "tool —";
+  }
+}
+
+for (const button of document.querySelectorAll("[data-jog]")) {
+  button.addEventListener("click", async () => {
+    const step = Number($("jog-step").value) * Number(button.dataset.sign);
+    await post("/api/dev/jog", { axis: button.dataset.jog, delta_m: step });
+    setTimeout(refreshToolPose, 1200);
+  });
+}
+$("jaws-open").addEventListener("click", () => post("/api/dev/gripper", { open: true }));
+$("jaws-close").addEventListener("click", () => post("/api/dev/gripper", { open: false }));
+setInterval(refreshToolPose, 2000);
+refreshToolPose();
+
+// --- setting a real rig up -------------------------------------------------------------
+//
+// The board is wherever it was put and the camera is wherever it was mounted, so the parts
+// of calibration that need a person (which corners are the board's, where the arm should
+// wait) are asked for here rather than guessed.
+
+const corners = [];
+const CORNER_NAMES = ["a1", "h1", "h8", "a8"];
+
+function drawCorners() {
+  const marks = $("setup-marks");
+  marks.innerHTML = corners
+    .map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="1.6" class="mark" />` +
+      `<text x="${x + 2.4}" y="${y + 1}" class="mark-label">${CORNER_NAMES[i]}</text>`)
+    .join("");
+  $("board-result").textContent = corners.length < 4
+    ? `Click ${CORNER_NAMES[corners.length]}.`
+    : "Working out where the board is…";
+}
+
+function newPhoto() {
+  corners.length = 0;
+  drawCorners();
+  $("setup-frame").src = `/api/camera/frame.png?scale=2&t=${Date.now()}`;
+}
+
+$("setup-frame").addEventListener("click", async (event) => {
+  if (corners.length >= 4) return;
+  const box = event.target.getBoundingClientRect();
+  // Percentages, so the marks follow the image however it is scaled; the server is told
+  // pixels in the full size frame.
+  corners.push([((event.clientX - box.left) / box.width) * 100, ((event.clientY - box.top) / box.height) * 100]);
+  drawCorners();
+  if (corners.length < 4) return;
+  const natural = { w: $("setup-frame").naturalWidth, h: $("setup-frame").naturalHeight };
+  const scale = Number(new URL($("setup-frame").src, location.origin).searchParams.get("scale") || 1);
+  const pixels = corners.map(([x, y]) => [(x / 100) * natural.w * scale, (y / 100) * natural.h * scale]);
+  const res = await fetch("/api/calibration/board", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ corners: pixels }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { $("board-result").textContent = data.detail || "Could not use those corners."; return; }
+  const board = data.board || {};
+  const reach = data.reach || {};
+  const outOfReach = (reach.unreachable || []).length;
+  $("board-result").textContent =
+    `${board.square_size_mm} mm squares, turned ${board.yaw_deg}°, corners off by ${board.squareness_mm} mm. ` +
+    (outOfReach ? `${outOfReach} squares out of reach — move the board closer.` : "Every square is reachable.");
+});
+
+$("setup-refresh").addEventListener("click", newPhoto);
+$("setup-clear").addEventListener("click", newPhoto);
+$("setup").addEventListener("click", () => { $("setup-dialog").showModal(); newPhoto(); });
+$("setup-camera").addEventListener("click", async () => {
+  $("camera-result").textContent = "Moving the arm so the camera can see the gripper…";
+  await post("/api/calibration/camera");
+});
+$("setup-park").addEventListener("click", async () => {
+  const res = await fetch("/api/calibration/park_here", { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  $("park-result").textContent = res.ok && data.park
+    ? `Saved: ${data.park.joints.map((v) => v.toFixed(2)).join(", ")}`
+    : data.detail || "Could not read the arm's pose.";
+});
+$("setup-save").addEventListener("click", async () => {
+  const res = await fetch("/api/calibration/save", { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  $("save-result").textContent = res.ok ? `Saved to ${data.profile_path}` : data.detail || "Could not save.";
+  if (res.ok) loadCalibration();
+});
+
+async function refreshSetup() {
+  if (!$("setup-dialog").open) return;
+  const res = await fetch("/api/calibration");
+  if (!res.ok) return;
+  const { draft } = await res.json();
+  if (draft.camera) {
+    const [x, y, z] = draft.camera.position_xyz;
+    $("camera-result").textContent =
+      `Camera at ${(x * 100).toFixed(0)}, ${(y * 100).toFixed(0)}, ${(z * 100).toFixed(0)} cm ` +
+      `(fit within ${draft.camera.error_mean_px} px).`;
+  }
+  if (draft.park) $("park-result").textContent = `Saved: ${draft.park.joints.map((v) => v.toFixed(2)).join(", ")}`;
+}
+setInterval(refreshSetup, 2000);
 
 // --- board views -----------------------------------------------------------------------
 

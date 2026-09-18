@@ -20,6 +20,7 @@ import time
 import rclpy
 import zenoh
 from chessbot_interfaces.action import Calibrate
+from chessbot_interfaces.srv import SetCalibration
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -49,7 +50,8 @@ class CalibrationNode(Node):
             goal_callback=lambda _goal: GoalResponse.ACCEPT,
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
         )
-        self.get_logger().info("Serving /calibration/calibrate")
+        self.create_service(SetCalibration, "/calibration/set", self._on_set)
+        self.get_logger().info("Serving /calibration/calibrate and /calibration/set")
 
     def _zenoh_config(self) -> zenoh.Config:
         config = zenoh.Config()
@@ -60,6 +62,40 @@ class CalibrationNode(Node):
     def _prime(self):
         self.session.put(prof.KV_KEY, self.profile.to_json(), encoding=zenoh.Encoding.APPLICATION_JSON)
         self.get_logger().info(f"Primed {prof.KV_KEY} (source={self.profile.source})")
+
+    def _on_set(self, request: SetCalibration.Request, response: SetCalibration.Response):
+        """Store a calibration measured elsewhere (the guided workflow in the UI).
+
+        This node owns the stored profile and the key-value store, so a measurement taken by
+        a node that has the arm and the camera is written here rather than there.
+        """
+        if request.square_size_m <= 0.0:
+            response.ok = False
+            response.message = "square_size_m must be positive"
+            return response
+
+        board = prof.BoardCalibration(
+            origin_xyz=[float(v) for v in request.board_origin_xyz],
+            yaw_rad=float(request.board_yaw_rad),
+            square_size_m=float(request.square_size_m),
+        )
+        camera = self.profile.camera
+        if len(request.camera_position_xyz) == 3 and len(request.camera_rpy) == 3:
+            camera = prof.CameraCalibration(
+                position_xyz=[float(v) for v in request.camera_position_xyz],
+                rpy=[float(v) for v in request.camera_rpy],
+                focal_px=float(request.camera_focal_px),
+            )
+        park = [float(v) for v in request.park_joints] or list(self.profile.park_joints)
+
+        self.profile = prof.CalibrationProfile(board=board, camera=camera, park_joints=park, source="measured")
+        prof.save(self.profile_path, self.profile)
+        self._prime()
+        self.get_logger().info(f"Stored a measured calibration in {self.profile_path}")
+        response.ok = True
+        response.message = "stored"
+        response.profile_path = self.profile_path
+        return response
 
     def _execute(self, goal_handle):
         feedback = Calibrate.Feedback()
@@ -82,7 +118,9 @@ class CalibrationNode(Node):
             # solve, verify. Until then each stage only reports progress.
             time.sleep(0.2)
 
-        self.profile = prof.CalibrationProfile(board=self.profile.board, source=self.profile.source)
+        self.profile = prof.CalibrationProfile(
+            board=self.profile.board, camera=self.profile.camera,
+            park_joints=self.profile.park_joints, source=self.profile.source)
         prof.save(self.profile_path, self.profile)
         self._prime()
         goal_handle.succeed()

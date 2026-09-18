@@ -78,11 +78,78 @@
       <div class="card">
         <h2>Robot</h2>
         <div class="row">
-          <button id="calibrate" type="button">Calibrate</button>
-          <button id="park" type="button">Park arm</button>
+          <button id="park" type="button">Home</button>
           <button id="resume" type="button">Resume</button>
+          <button id="setup" type="button">Set up…</button>
+        </div>
+        <div class="jog" id="jog">
+          <div class="jog-head">
+            <span id="tool-pose" class="mono">tool —</span>
+            <label class="step">Step
+              <select id="jog-step">
+                <option value="0.005">5 mm</option>
+                <option value="0.01" selected>10 mm</option>
+                <option value="0.02">20 mm</option>
+              </select>
+            </label>
+          </div>
+          <div class="jog-pad">
+            <button data-jog="x" data-sign="1" type="button">X +</button>
+            <button data-jog="x" data-sign="-1" type="button">X −</button>
+            <button data-jog="y" data-sign="1" type="button">Y +</button>
+            <button data-jog="y" data-sign="-1" type="button">Y −</button>
+            <button data-jog="z" data-sign="1" type="button">Z +</button>
+            <button data-jog="z" data-sign="-1" type="button">Z −</button>
+          </div>
+          <div class="row">
+            <button id="jaws-open" type="button">Open jaws</button>
+            <button id="jaws-close" type="button">Close jaws</button>
+          </div>
         </div>
       </div>
+
+      <dialog id="setup-dialog" class="setup">
+        <form method="dialog" class="setup-head">
+          <h2>Set up the robot</h2>
+          <button value="close" class="ghost" type="submit">Close</button>
+        </form>
+        <ol class="steps" id="setup-steps">
+          <li data-step="camera">
+            <h3>1. Find the camera</h3>
+            <p>The arm moves through a few poses and opens its jaws so the camera can see where
+              the gripper is. Keep the workspace clear.</p>
+            <button id="setup-camera" type="button">Measure the camera</button>
+            <p class="result" id="camera-result"></p>
+          </li>
+          <li data-step="board">
+            <h3>2. Mark the board</h3>
+            <p>Click the board's four outer corners in this order:
+              <strong>a1, h1, h8, a8</strong>. a1 is the square to the left of the white pieces.</p>
+            <div class="shot">
+              <img id="setup-frame" alt="Overhead camera" />
+              <svg id="setup-marks" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="row">
+              <button id="setup-refresh" type="button">New photo</button>
+              <button id="setup-clear" type="button">Start over</button>
+            </div>
+            <p class="result" id="board-result"></p>
+          </li>
+          <li data-step="park">
+            <h3>3. Choose where it waits</h3>
+            <p>Jog the arm with the Robot controls to somewhere clear of the board, then save
+              that as the park pose.</p>
+            <button id="setup-park" type="button">Park here</button>
+            <p class="result" id="park-result"></p>
+          </li>
+          <li data-step="save">
+            <h3>4. Save</h3>
+            <p>Stores the calibration so perception and the arm agree on where the board is.</p>
+            <button id="setup-save" class="primary" type="button">Save calibration</button>
+            <p class="result" id="save-result"></p>
+          </li>
+        </ol>
+      </dialog>
 
       <div class="card feed">
         <h2>Thoughts</h2>

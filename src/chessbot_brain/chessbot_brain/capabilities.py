@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import zenoh
 from chessbot_interfaces.action import Calibrate
-from chessbot_interfaces.srv import GetBoardState, Reason
+from chessbot_interfaces.srv import GetBoardState, Reason, SetCalibration
 from control_msgs.action import FollowJointTrajectory, ParallelGripperCommand
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.msg import MoveItErrorCodes
@@ -29,7 +29,7 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import CompressedImage, Image
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 from tf2_ros import Buffer, TransformException, TransformListener
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -119,6 +119,7 @@ class Capabilities:
         self.arm_action = ActionClient(node, FollowJointTrajectory, "/arm_controller/follow_joint_trajectory")
         self.gripper_action = ActionClient(node, ParallelGripperCommand, "/gripper_controller/gripper_cmd")
         self.calibrate_action = ActionClient(node, Calibrate, "/calibration/calibrate")
+        self.set_calibration_client = node.create_client(SetCalibration, "/calibration/set")
 
         config = zenoh.Config()
         config.insert_json5("mode", '"client"')
@@ -168,6 +169,24 @@ class Capabilities:
             "reasoning": self.reasoner.service_is_ready(),
         }
 
+    def set_calibration(self, origin_xyz, yaw_rad: float, square_size_m: float, park_joints, camera=None):
+        """Store a measured calibration. The calibration node owns the profile, so it writes it."""
+        if not self.set_calibration_client.wait_for_service(timeout_sec=5.0):
+            raise CapabilityError("the calibration node is not available")
+        request = SetCalibration.Request()
+        request.board_origin_xyz = [float(v) for v in origin_xyz]
+        request.board_yaw_rad = float(yaw_rad)
+        request.square_size_m = float(square_size_m)
+        request.park_joints = [float(v) for v in park_joints]
+        if camera is not None:
+            request.camera_position_xyz = [float(v) for v in camera.position]
+            request.camera_rpy = [float(v) for v in camera.rpy]
+            request.camera_focal_px = float(camera.focal_px)
+        response = _wait(self.set_calibration_client.call_async(request), 10.0, "storing the calibration")
+        if not response.ok:
+            raise CapabilityError(f"calibration was not stored: {response.message}")
+        return response
+
     # --- key-value store --------------------------------------------------------------
 
     def kv_get(self, key: str, timeout_s: float = 2.0) -> dict | None:
@@ -193,6 +212,43 @@ class Capabilities:
         request = Reason.Request(role=role, prompt=prompt, images=list(images), json_schema=json_schema)
         response = _wait(self.reasoner.call_async(request), timeout_s, "reasoning")
         return response if response.result == Reason.Response.RESULT_OK else None
+
+    def camera_raw(self, topic: str = "/overhead_camera/image_raw", timeout_s: float = 3.0) -> Image | None:
+        """One camera frame as it arrived, for measurements that work in pixels."""
+        arrived = threading.Event()
+        frames: list[Image] = []
+
+        def on_image(msg: Image):
+            if not frames:
+                frames.append(msg)
+                arrived.set()
+
+        subscription = self.node.create_subscription(Image, topic, on_image, qos_profile_sensor_data)
+        try:
+            arrived.wait(timeout_s)
+        finally:
+            self.node.destroy_subscription(subscription)
+        return frames[0] if frames else None
+
+    def camera_centre(self, topic: str = "/overhead_camera/camera_info", timeout_s: float = 3.0):
+        """(cx, cy, fx) from camera_info, or None. Used as the starting point for a fit."""
+        arrived = threading.Event()
+        infos: list[CameraInfo] = []
+
+        def on_info(msg: CameraInfo):
+            if not infos:
+                infos.append(msg)
+                arrived.set()
+
+        subscription = self.node.create_subscription(CameraInfo, topic, on_info, qos_profile_sensor_data)
+        try:
+            arrived.wait(timeout_s)
+        finally:
+            self.node.destroy_subscription(subscription)
+        if not infos:
+            return None
+        info = infos[0]
+        return (float(info.k[2]), float(info.k[5]), float(info.k[0]))
 
     def camera_frame(self, topic: str = "/overhead_camera/image_raw", scale: int = 2, timeout_s: float = 3.0) -> CompressedImage | None:
         """One camera frame as PNG (downscaled), for questions to the reasoning model.

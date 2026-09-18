@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import collections
 import json
+import math
 import os
 import threading
 import time
@@ -43,7 +44,8 @@ from std_msgs.msg import String
 
 from chessbot_brain import skills
 from chessbot_brain.board import Board, piece_colour, square_name
-from chessbot_brain.capabilities import ArmConfig, Capabilities, CapabilityError
+from chessbot_brain import calibration_flow as calib
+from chessbot_brain.capabilities import ArmConfig, Capabilities, CapabilityError, tool_down
 from chessbot_brain.engine import EngineError, UciEngine, choose_reply
 from chessbot_brain.geometry import PIECE_HEIGHTS, BoardGeometry, graveyard_cell
 from chessbot_brain.move_reading import read_move
@@ -78,6 +80,11 @@ BOARD_RESULT_TEXT = {
 
 # Robot meshes, and the piece set description the UI draws pieces from.
 PACKAGE_FILE_EXTENSIONS = {".stl", ".dae", ".obj", ".glb", ".gltf", ".json"}
+
+# Where manual control and calibration are allowed to put the tool, in base_link: forward of
+# the base, within reach, and above the table. An uncalibrated rig does not know where the
+# board is, so nothing may be commanded outside this.
+JOG_BOX = ((0.08, 0.30), (-0.18, 0.18), (0.04, 0.30))
 
 
 class Busy(RuntimeError):
@@ -133,6 +140,8 @@ class BrainNode(Node):
         self.thoughts: collections.deque = collections.deque(maxlen=200)
         self.last_error = ""
         self.current_job = ""
+        # What the guided calibration workflow has established so far.
+        self.draft = calib.Draft()
 
         self.engine: UciEngine | None = None
         if stockfish_path and os.path.isfile(stockfish_path):
@@ -358,7 +367,7 @@ class BrainNode(Node):
         reading = read_move(board, legal, list(response.state.squares), list(response.state.confidence))
         if reading.move is None and len(reading.candidates) >= 2 and reading.changed:
             self.think(Thought.PERCEIVE, f"I couldn't tell your move ({reading.reason}); asking Gemma to look.")
-            choice = self._tiebreak(board, [move for move, _ in reading.candidates])
+            choice = self._tiebreak(board, [move for move, _ in reading.candidates], legal)
             if choice is not None:
                 return choice
         if reading.move is None:
@@ -367,12 +376,8 @@ class BrainNode(Node):
         self.think(Thought.PERCEIVE, f"I saw {reading.move}: {reading.reason}.")
         return reading.move
 
-    def _tiebreak(self, board: Board, candidates: list[str]) -> str | None:
-        """Gemma picks which candidate move the image shows; accepted only when it is confident."""
-        frame = self.caps.camera_frame()
-        if frame is None:
-            self.think(Thought.PERCEIVE, "No camera frame to show Gemma.")
-            return None
+    def _ask_which_move(self, board: Board, frame, candidates: list[str]) -> tuple[str | None, float]:
+        """Ask the model which of `candidates` the image shows. Returns (move, confidence)."""
         schema = {
             "type": "object",
             "properties": {"move": {"enum": [*candidates, "unclear"]}, "confidence": {"type": "number"}},
@@ -388,19 +393,49 @@ class BrainNode(Node):
         except CapabilityError:
             answer = None
         if answer is None:
-            self.think(Thought.PERCEIVE, "Gemma isn't available to look.")
-            return None
+            return None, 0.0
         try:
             parsed = json.loads(answer.text)
         except json.JSONDecodeError:
             self.think(Thought.PERCEIVE, f"Gemma's answer wasn't readable: {answer.text[:80]!r}.")
+            return None, 0.0
+        return parsed.get("move"), float(parsed.get("confidence", 0.0))
+
+    def _tiebreak(self, board: Board, candidates: list[str], legal: list[str]) -> str | None:
+        """Gemma picks which candidate move the image shows, if it can be shown to be looking.
+
+        A vision model asked to choose between plausible chess moves can answer from what the
+        opening book makes likely rather than from the image, and sound no less sure for it. So
+        its answer only counts if it also declines a decoy - the same question with every real
+        candidate replaced by moves that are legal but were not played. A model that picks one
+        of those is guessing, and is not trusted for this frame.
+        """
+        frame = self.caps.camera_frame()
+        if frame is None:
+            self.think(Thought.PERCEIVE, "No camera frame to show Gemma.")
             return None
-        move, confidence = parsed.get("move"), float(parsed.get("confidence", 0.0))
-        if move in candidates and confidence >= 0.7:
-            self.think(Thought.PERCEIVE, f"Gemma says you played {move} (confidence {confidence:.2f}).", model_generated=True)
-            return move
-        self.think(Thought.PERCEIVE, f"Gemma couldn't tell either ({move}, confidence {confidence:.2f}).", model_generated=True)
-        return None
+        move, confidence = self._ask_which_move(board, frame, candidates)
+        if move is None and confidence == 0.0:
+            self.think(Thought.PERCEIVE, "Gemma isn't available to look.")
+            return None
+        if move not in candidates or confidence < 0.7:
+            self.think(Thought.PERCEIVE, f"Gemma couldn't tell either ({move}, confidence {confidence:.2f}).",
+                       model_generated=True)
+            return None
+
+        decoys = [m for m in legal if m not in candidates][: len(candidates)]
+        if decoys:
+            decoy_move, decoy_confidence = self._ask_which_move(board, frame, decoys)
+            if decoy_move in decoys and decoy_confidence >= 0.7:
+                self.think(
+                    Thought.PERCEIVE,
+                    f"Gemma answered {move} but also picked {decoy_move} from moves you did not play, "
+                    "so it is guessing rather than looking.",
+                    model_generated=True,
+                )
+                return None
+        self.think(Thought.PERCEIVE, f"Gemma says you played {move} (confidence {confidence:.2f}).", model_generated=True)
+        return move
 
     def _comment_on(self, fen_before: str, human_move: str | None, reply: str):
         """A sentence or two explaining the robot's move, in the thought feed. Runs in the background."""
@@ -519,6 +554,135 @@ class BrainNode(Node):
         self.think(Thought.RECOVER, "Resumed by operator.")
         self.set_phase(GameState.PHASE_HUMAN_TURN)
 
+    # --- manual control, for bringing a real rig up ----------------------------------
+    #
+    # Every target is kept inside JOG_BOX: on a rig that is not calibrated yet the arm has no
+    # idea where the board is, and the way to find that out is not by driving into it.
+
+    def job_move_tool(self, xyz, yaw_deg: float):
+        target = tuple(min(max(v, lo), hi) for v, (lo, hi) in zip(xyz, JOG_BOX))
+        if tuple(xyz) != target:
+            self.think(Thought.EXPLAIN, f"Kept inside the safe box: asked {tuple(round(v, 3) for v in xyz)}, "
+                                        f"moving to {tuple(round(v, 3) for v in target)}.")
+        solution = self.caps.solve_ik(target, tool_down(math.radians(yaw_deg)))
+        self.caps.execute(self.caps.joint_move_trajectory(solution))
+        self.think(Thought.ACT, f"Tool at {tuple(round(v, 3) for v in target)}.")
+
+    def job_jog(self, axis: str, delta_m: float):
+        (x, y, z), yaw = self.caps.tool_pose()
+        step = {"x": (delta_m, 0.0, 0.0), "y": (0.0, delta_m, 0.0), "z": (0.0, 0.0, delta_m)}.get(axis)
+        if step is None:
+            raise CapabilityError(f"unknown axis {axis!r}")
+        self.job_move_tool((x + step[0], y + step[1], z + step[2]), math.degrees(yaw))
+
+    def job_gripper(self, position: float):
+        self.caps.gripper(position)
+        self.think(Thought.ACT, f"Gripper at {position:.3f} rad.")
+
+    # --- guided calibration ----------------------------------------------------------
+
+    def job_calibrate_camera(self):
+        """Show the camera the gripper at several poses, and fit the camera's pose to that.
+
+        The gripper is the only calibration target a real rig always has. Opening the jaws
+        moves them and nothing else, so differencing a closed and an open frame finds them in
+        the image without any marker or template.
+        """
+        previous = self.phase
+        self.set_phase(GameState.PHASE_CALIBRATING)
+        try:
+            centre = self.caps.camera_centre()
+            frame = self.caps.camera_raw()
+            if frame is None:
+                raise CapabilityError("no camera frames")
+            centre_px = (centre[0], centre[1]) if centre and centre[0] else (frame.width / 2, frame.height / 2)
+            focal_px = centre[2] if centre and centre[2] > 100.0 else calib.DEFAULT_FOCAL_PX
+
+            points, pixels = [], []
+            self.caps.gripper(self.caps.arm.gripper_closed)
+            for target in calib.CAMERA_SAMPLES:
+                try:
+                    solution = self.caps.solve_ik(target, tool_down(0.0))
+                except CapabilityError:
+                    continue
+                self.caps.execute(self.caps.joint_move_trajectory(solution))
+                closed = self.caps.camera_raw()
+                self.caps.gripper(self.caps.arm.gripper_open)
+                opened = self.caps.camera_raw()
+                self.caps.gripper(self.caps.arm.gripper_closed)
+                position, _yaw = self.caps.tool_pose()
+                pixel = calib.moved_pixel(closed, opened)
+                if pixel is None:
+                    continue
+                points.append(position)
+                pixels.append(pixel)
+                self.think(Thought.PERCEIVE, f"Gripper at {tuple(round(v, 3) for v in position)} "
+                                             f"seen at ({pixel[0]:.0f}, {pixel[1]:.0f}).")
+
+            if len(points) < 5:
+                self.think(Thought.RECOVER, f"Only saw the gripper at {len(points)} poses; need 5. "
+                                            "Check that the arm is in the camera's view.")
+                return
+            model = calib.fit_camera(points, pixels, centre_px, focal_px)
+            self.draft.camera = model
+            self.think(Thought.VERIFY, f"Camera at {tuple(round(v, 3) for v in model.position)}, "
+                                       f"fit {model.error_mean_px:.0f} px mean over {len(points)} poses.")
+        finally:
+            self.set_phase(previous)
+
+    def calibration_board(self, corners) -> dict:
+        """The board pose implied by four corners marked in the camera image (a1, h1, h8, a8)."""
+        if self.draft.camera is None:
+            raise CapabilityError("measure the camera first")
+        board = calib.board_from_corners(self.draft.camera, corners)
+        if board is None:
+            raise CapabilityError("those corners do not point at the table")
+        self.draft.board_origin_xyz = board.origin_xyz
+        self.draft.board_yaw_rad = board.yaw_rad
+        self.draft.square_size_m = board.square_size_m
+        self.draft.squareness_m = board.squareness_m
+        self.draft.unreachable = self.unreachable_squares(board.origin_xyz, board.yaw_rad, board.square_size_m)
+        self.think(
+            Thought.VERIFY,
+            f"Board at {tuple(round(v, 3) for v in board.origin_xyz)}, "
+            f"{board.square_size_m * 1000:.0f} mm squares, "
+            f"{len(self.draft.unreachable)} squares out of reach.",
+        )
+        return self.draft.steps()
+
+    def unreachable_squares(self, origin_xyz, yaw_rad: float, square_size_m: float) -> list[str]:
+        """Which squares the arm cannot reach, at the height it grasps a piece."""
+        out = []
+        for square, (x, y, _z) in calib.square_centres(origin_xyz, yaw_rad, square_size_m).items():
+            try:
+                self.caps.solve_ik((x, y, skills.GRASP_HEIGHT), tool_down(0.0))
+            except CapabilityError:
+                out.append(square)
+        return out
+
+    def calibration_park_here(self) -> dict:
+        """Take the arm's current joints as the park pose: jog it there, then save it."""
+        self.draft.park_joints = self.caps.joint_positions()
+        self.think(Thought.EXPLAIN, f"Park pose set to {[round(v, 3) for v in self.draft.park_joints]}.")
+        return self.draft.steps()
+
+    def calibration_save(self) -> dict:
+        """Hand the finished draft to the calibration node, which owns the stored profile."""
+        if self.draft.board_origin_xyz is None or not self.draft.square_size_m:
+            raise CapabilityError("mark the board's corners first")
+        result = self.caps.set_calibration(
+            self.draft.board_origin_xyz,
+            self.draft.board_yaw_rad or 0.0,
+            self.draft.square_size_m,
+            self.draft.park_joints or [],
+            self.draft.camera,
+        )
+        if self.draft.park_joints:
+            self.park_joints = list(self.draft.park_joints)
+        self.think(Thought.VERIFY, f"Calibration saved to {result.profile_path}.")
+        return {"ok": result.ok, "message": result.message, "profile_path": result.profile_path,
+                "steps": self.draft.steps()}
+
     def geometry_if_calibrated(self) -> BoardGeometry | None:
         try:
             return self.geometry()
@@ -577,6 +741,29 @@ class DemoTransfer(BaseModel):
     dst: str
 
 
+class MoveTool(BaseModel):
+    x: float
+    y: float
+    z: float
+    yaw_deg: float = 0.0
+
+
+class Jog(BaseModel):
+    axis: str
+    delta_m: float
+
+
+class Gripper(BaseModel):
+    position: float | None = None
+    open: bool | None = None
+
+
+class BoardCorners(BaseModel):
+    """The board's four outer corners in the camera image, in the order a1, h1, h8, a8."""
+
+    corners: list[list[float]]
+
+
 def build_app(node: BrainNode) -> FastAPI:
     app = FastAPI(title="chessbot brain")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -629,6 +816,77 @@ def build_app(node: BrainNode) -> FastAPI:
     @app.post("/api/demo_transfer")
     def demo_transfer(body: DemoTransfer):
         return submit("demo_transfer", node.job_demo_transfer, body.src, body.dst)
+
+    # --- manual control, for bringing a rig up and for debugging --------------------
+
+    @app.get("/api/dev/tool_pose")
+    def tool_pose():
+        try:
+            (x, y, z), yaw = node.caps.tool_pose()
+        except CapabilityError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {"xyz": [round(x, 4), round(y, 4), round(z, 4)], "yaw_deg": round(math.degrees(yaw), 1),
+                "joints": node.caps.joint_positions(), "box": [list(a) for a in JOG_BOX]}
+
+    @app.post("/api/dev/move_tool")
+    def move_tool(body: MoveTool):
+        return submit("move_tool", node.job_move_tool, (body.x, body.y, body.z), body.yaw_deg)
+
+    @app.post("/api/dev/jog")
+    def jog(body: Jog):
+        if body.axis not in ("x", "y", "z"):
+            raise HTTPException(status_code=422, detail="axis must be x, y or z")
+        return submit("jog", node.job_jog, body.axis, body.delta_m)
+
+    @app.post("/api/dev/gripper")
+    def gripper(body: Gripper):
+        position = body.position
+        if position is None:
+            position = node.caps.arm.gripper_open if body.open else node.caps.arm.gripper_closed
+        return submit("gripper", node.job_gripper, float(position))
+
+    @app.get("/api/camera/frame.png")
+    def camera_frame(scale: int = 2):
+        """The latest overhead frame, for the calibration workflow and for looking at."""
+        frame = node.caps.camera_frame(scale=max(1, min(scale, 8)))
+        if frame is None:
+            raise HTTPException(status_code=503, detail="no camera frames")
+        return Response(bytes(frame.data), media_type="image/png",
+                        headers={"Cache-Control": "no-store"})
+
+    # --- guided calibration ---------------------------------------------------------
+
+    @app.get("/api/calibration")
+    def calibration():
+        stored = node.caps.kv_get("chessbot/kv/calibration")
+        return {"stored": stored, "draft": node.draft.steps()}
+
+    @app.post("/api/calibration/camera")
+    def calibration_camera():
+        return submit("calibrate_camera", node.job_calibrate_camera)
+
+    @app.post("/api/calibration/board")
+    def calibration_board(body: BoardCorners):
+        if len(body.corners) != 4:
+            raise HTTPException(status_code=422, detail="give four corners: a1, h1, h8, a8")
+        try:
+            return node.calibration_board([(float(c[0]), float(c[1])) for c in body.corners])
+        except CapabilityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/park_here")
+    def calibration_park_here():
+        try:
+            return node.calibration_park_here()
+        except CapabilityError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/save")
+    def calibration_save():
+        try:
+            return node.calibration_save()
+        except CapabilityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/robot_description")
     def robot_description():

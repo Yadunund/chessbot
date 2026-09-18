@@ -1,0 +1,25 @@
+# Store a calibration measured elsewhere (the guided workflow in the UI, which needs the
+# arm and the camera, both of which the brain already talks to).
+#
+# The calibration node owns the stored profile and the key-value store the rest of the stack
+# reads, so it is the only writer: this is how a measurement reaches it.
+
+# Board frame origin (outer corner of a1) in base_link, metres.
+float64[3] board_origin_xyz
+# Rotation of the board frame about +z in base_link, radians.
+float64 board_yaw_rad
+float64 square_size_m
+
+# Where the arm waits between moves, in the order of the arm's joints. Empty leaves it.
+float64[] park_joints
+
+# The overhead camera pose that measured the board, for tools and for the next calibration.
+# Empty leaves whatever is stored.
+float64[] camera_position_xyz
+float64[] camera_rpy
+float64 camera_focal_px
+---
+bool ok
+string message
+# Where the profile was written.
+string profile_path

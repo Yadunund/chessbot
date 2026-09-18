@@ -45,9 +45,27 @@ class BoardCalibration:
 
 
 @dataclass
+class CameraCalibration:
+    """Where the overhead camera is, as measured by the guided workflow.
+
+    Perception takes the camera pose from TF (it is part of the robot description), so this
+    is the record of what was measured: what to put in the launch, and the starting point for
+    the next calibration.
+    """
+
+    position_xyz: list[float] = field(default_factory=lambda: [0.234, 0.0, 0.51])
+    rpy: list[float] = field(default_factory=lambda: [math.pi, 0.0, -math.pi / 2])
+    focal_px: float = 0.0
+    error_mean_px: float = 0.0
+
+
+@dataclass
 class CalibrationProfile:
     version: int = SCHEMA_VERSION
     board: BoardCalibration = field(default_factory=BoardCalibration)
+    camera: CameraCalibration = field(default_factory=CameraCalibration)
+    # Where the arm waits between moves. Empty means the node's own default.
+    park_joints: list[float] = field(default_factory=list)
     # "nominal" when built from design dimensions rather than measured.
     source: str = "nominal"
     created_unix: float = field(default_factory=time.time)
@@ -58,9 +76,12 @@ class CalibrationProfile:
     @staticmethod
     def from_dict(data: dict) -> "CalibrationProfile":
         board = BoardCalibration(**data.get("board", {}))
+        camera = CameraCalibration(**data.get("camera", {}))
         return CalibrationProfile(
             version=int(data.get("version", SCHEMA_VERSION)),
             board=board,
+            camera=camera,
+            park_joints=list(data.get("park_joints", [])),
             source=str(data.get("source", "nominal")),
             created_unix=float(data.get("created_unix", time.time())),
         )

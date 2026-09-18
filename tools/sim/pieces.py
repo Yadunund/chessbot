@@ -32,8 +32,12 @@ def piece_sdf(letter: str) -> str:
     r, h, m = BASE_DIAMETER / 2, HEIGHT[kind], MASS[kind]
     ixx = m * (3 * r * r + h * h) / 12
     izz = m * r * r / 2
-    colour = "0.9 0.87 0.82 1" if letter.isupper() else "0.12 0.11 0.1 1"
-    ambient = "0.45 0.43 0.41 1" if letter.isupper() else "0.06 0.05 0.05 1"
+    # Taken off the real camera (tools/dev/sample_colours.py) rather than invented. The dark
+    # pieces of a wooden set are brown, close in hue to the dark squares they stand on, which
+    # is the hard case perception actually has to handle - black pieces on a light board would
+    # make simulation easier than the table it stands in for.
+    colour = "0.85 0.78 0.58 1" if letter.isupper() else "0.30 0.18 0.11 1"
+    ambient = "0.42 0.39 0.29 1" if letter.isupper() else "0.15 0.09 0.06 1"
     return f"""<?xml version="1.0"?>
 <sdf version="1.9">
   <model name="piece">
