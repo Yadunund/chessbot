@@ -3,7 +3,7 @@
   The chessbot application on top of a running robot (simulated or real): perception,
   the Rerun bridge and viewer, motion, reasoning, calibration and the brain.
 
-  Included by sim.launch.xml and real.launch.xml, which bring up the robot half.
+  Included by chessbot.launch.xml, which also brings up the robot half (robot.launch.xml).
   Perception and the Rerun bridge load into the robot's io container, next to the cameras.
 -->
 <launch>

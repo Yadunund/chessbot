@@ -118,6 +118,16 @@ GZ_SIM_SYSTEM_PLUGIN_PATH = "${CONDA_PREFIX}/lib"
 # Nodes connect to the chessbot router rather than scouting for one.
 ZENOH_CONFIG_OVERRIDE = 'connect/endpoints=["tcp/127.0.0.1:7447"];scouting/multicast/enabled=false'
 
+# ROS message packages export their Python binding libraries, and anything that links one
+# without using it fails to dlopen later with "undefined symbol: PyLong_FromLong" (the
+# Feetech driver, loaded by ros2_control, does). Our own packages ask for this in their
+# CMakeLists; this covers the ones vendored from elsewhere.
+[target.linux-64.activation.env]
+LDFLAGS = "-Wl,--as-needed ${LDFLAGS}"
+
+[target.linux-aarch64.activation.env]
+LDFLAGS = "-Wl,--as-needed ${LDFLAGS}"
+
 [tasks]
 import-deps = { cmd = "mkdir -p external && vcs import external < chessbot.repos" }
 build = { cmd = "colcon build --symlink-install --base-paths src external", depends-on = ["import-deps"] }
@@ -128,8 +138,8 @@ stockfish = { cmd = "make -C external/Stockfish/src -j build ARCH=native COMP=gc
 
 # Run
 router = { cmd = "bash -c 'exec zenohd -c config/zenoh/router.json5 --plugin-search-dir \"$CONDA_PREFIX/lib\"'" }
-real = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup real.launch.xml \"$@\"' --" }
-sim = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup sim.launch.xml \"$@\"' --" }
+real = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup chessbot.launch.xml hardware:=real \"$@\"' --" }
+sim = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup chessbot.launch.xml hardware:=gazebo \"$@\"' --" }
 # Regenerate the Rerun layout (src/chessbot_bringup/config/chessbot.rbl) after editing its script.
 rerun-blueprint = { cmd = "python src/chessbot_bringup/rerun/make_blueprint.py" }
 # Motion scenarios in simulation (start with: pixi run sim cameras:=false viewer:=none).

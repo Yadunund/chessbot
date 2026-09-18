@@ -1,20 +1,27 @@
 <?xml version="1.0"?>
 <!--
-  The whole chessbot stack on the real SO-101: the arm through ros2_control and the
-  USB cameras (robot_real.launch.xml), plus the application (app.launch.xml).
+  The whole chessbot stack. One entry point for simulation and for the real robot: the
+  application above (app.launch.xml) is identical either way, and `hardware` selects what
+  it drives (robot.launch.xml).
 
-  Run the router first (pixi run router). Set up udev rules first so the arm and cameras
-  have stable device names (config/hardware/99-chessbot.rules.example). hardware:=mock
-  runs everything without the arm, for a dry run.
+    pixi run sim                        the SO-101 in Gazebo (hardware:=gazebo)
+    pixi run real                       the SO-101 over USB (hardware:=real)
+    pixi run real hardware:=mock        neither: a dry run of the whole stack
+
+  Run the router first (pixi run router), since every node connects to it.
 -->
 <launch>
+  <arg name="hardware" default="gazebo" description="gazebo: simulated; real: the SO-101 over USB; mock: no arm (dry run)." />
   <arg name="container" default="robot_io" />
-  <arg name="hardware" default="real" description="real: the SO-101 over USB; mock: no arm (dry run)." />
-  <arg name="usb_port" default="/dev/so101" />
-  <arg name="joint_config_file" default="$(env HOME)/.chessbot/so101_joints.yaml" description="Servo calibration (see chessbot_description/config/hardware)." />
-  <arg name="cameras" default="true" description="Start the overhead and wrist USB cameras." />
+
+  <!-- Robot -->
+  <arg name="cameras" default="true" description="Cameras: simulated or USB. False speeds up motion tests." />
+  <arg name="usb_port" default="/dev/so101" description="Servo bus (hardware:=real; udev rules give it this name)." />
+  <arg name="joint_config_file" default="" description="Servo register overrides; empty uses the servos' own calibration." />
   <arg name="overhead_xyz" default="0.234 0.0 0.51" description="Overhead camera position in base_link, metres." />
-  <arg name="overhead_rpy" default="3.14159 0.0 -1.5708" description="Overhead camera orientation (optical frame) in base_link." />
+  <arg name="overhead_rpy" default="3.14159 0.0 -1.5708" description="Overhead camera orientation (optical frame)." />
+
+  <!-- Application -->
   <arg name="rerun" default="true" description="Run the Rerun bridge." />
   <arg name="brain" default="true" description="Run the brain (game engine and orchestrator)." />
   <arg name="rerun_grpc_port" default="9876" />
@@ -26,19 +33,22 @@
   <arg name="calibration_file" default="$(env HOME)/.chessbot/calibration.yaml" />
   <arg name="llm_url" default="http://127.0.0.1:8081" description="llama-server serving the reasoning model (pixi run llm)." />
 
-  <include file="$(find-pkg-share chessbot_bringup)/launch/robot_real.launch.xml">
-    <arg name="container" value="$(var container)" />
+  <!-- Only simulation has a clock to follow. -->
+  <let name="use_sim_time" value="$(eval '&quot;$(var hardware)&quot; == &quot;gazebo&quot;')" />
+
+  <include file="$(find-pkg-share chessbot_bringup)/launch/robot.launch.xml">
     <arg name="hardware" value="$(var hardware)" />
+    <arg name="container" value="$(var container)" />
+    <arg name="cameras" value="$(var cameras)" />
     <arg name="usb_port" value="$(var usb_port)" />
     <arg name="joint_config_file" value="$(var joint_config_file)" />
-    <arg name="cameras" value="$(var cameras)" />
     <arg name="overhead_xyz" value="$(var overhead_xyz)" />
     <arg name="overhead_rpy" value="$(var overhead_rpy)" />
   </include>
 
   <include file="$(find-pkg-share chessbot_bringup)/launch/app.launch.xml">
     <arg name="container" value="$(var container)" />
-    <arg name="use_sim_time" value="false" />
+    <arg name="use_sim_time" value="$(var use_sim_time)" />
     <arg name="rerun" value="$(var rerun)" />
     <arg name="brain" value="$(var brain)" />
     <arg name="rerun_grpc_port" value="$(var rerun_grpc_port)" />
