@@ -10,6 +10,7 @@ calls: they do one physical thing and either return or raise.
 from __future__ import annotations
 
 import math
+import time
 from typing import Callable, Sequence
 
 from chessbot_brain.board import MoveEffects, piece_colour
@@ -25,6 +26,11 @@ PLACE_DROP = 0.003
 # Hover heights tried in order. The highest clears every piece, but close to the
 # robot's base it is out of reach, so the arm hovers lower there.
 TRANSIT_HEIGHTS = (0.08, 0.065, 0.05)
+# Jaw angles worth trying, and how long to spend looking for a pose that works. Both exist so
+# that an unreachable square is reported in seconds: searching harder does not make a square
+# the arm cannot reach reachable, it just hides the answer.
+MAX_GRASP_YAWS = 6
+SEARCH_BUDGET_S = 25.0
 
 Narrate = Callable[[str], None]
 
@@ -61,11 +67,16 @@ def lift_if_low(caps: Capabilities, geometry: BoardGeometry | None):
 
 def grasp_yaws(caps: Capabilities, piece_xyz, others_xyz: Sequence, offset: float) -> list[float]:
     """Jaw yaws to try, clearest of the other pieces first. Refuses when every yaw
-    would put the gripper into another piece."""
+    would put the gripper into another piece.
+
+    Only the best few are returned. Every yaw that is tried and fails costs an IK call, and
+    an IK call for a pose near the edge of reach takes seconds, so trying all two dozen turns
+    an unreachable square into minutes of grinding instead of a quick refusal.
+    """
     ranked = jaw_clearances(piece_xyz, list(others_xyz), offset, caps.arm.piece_radius)
     if ranked[0][1] < 0.0:
         raise CapabilityError(f"no jaw orientation clears the neighbouring pieces (best overlap {-ranked[0][1] * 1000:.0f} mm)")
-    return [yaw for yaw, clearance in ranked if clearance >= 0.0]
+    return [yaw for yaw, clearance in ranked if clearance >= 0.0][:MAX_GRASP_YAWS]
 
 
 def move_above(
@@ -78,8 +89,12 @@ def move_above(
     """
     lift_if_low(caps, geometry)
     last_error: CapabilityError | None = None
+    deadline = time.monotonic() + SEARCH_BUDGET_S
     for height in TRANSIT_HEIGHTS:
         for yaw in yaws:
+            if time.monotonic() > deadline:
+                raise last_error or CapabilityError(
+                    f"no reachable hover pose within {SEARCH_BUDGET_S:.0f}s of searching")
             try:
                 target = caps.solve_ik(_above(tool_point(piece_xyz, yaw, offset), height), tool_down(yaw))
             except CapabilityError as exc:
