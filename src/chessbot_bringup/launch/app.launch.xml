@@ -18,6 +18,8 @@
   <arg name="recording_dir" default="$(env HOME)/chessbot_recordings" />
   <arg name="rest_port" default="8000" />
   <arg name="calibration_file" default="$(env HOME)/.chessbot/calibration.yaml" />
+  <arg name="zenoh_endpoint" default="tcp/127.0.0.1:7447" description="Router for the key-value store." />
+  <arg name="play_moves" default="true" description="False reports the reply without moving the arm." />
   <arg name="llm_url" default="http://127.0.0.1:8081" description="llama-server serving the reasoning model (pixi run llm)." />
   <arg name="joint_velocity" default="0.8" description="Top joint speed, rad/s." />
   <arg name="cartesian_speed" default="0.04" description="Top tool speed along a path, m/s." />
@@ -67,6 +69,7 @@
   <!-- Calibration: owns the YAML profile and primes the key-value store. -->
   <node pkg="chessbot_calibration" exec="calibration_node" name="calibration" output="screen">
     <param name="profile_path" value="$(var calibration_file)" />
+    <param name="zenoh_endpoint" value="$(var zenoh_endpoint)" />
     <param name="use_sim_time" value="$(var use_sim_time)" />
   </node>
 
@@ -75,6 +78,8 @@
     <node pkg="chessbot_brain" exec="brain_node" name="brain" output="screen">
       <param name="use_sim_time" value="$(var use_sim_time)" />
       <param name="rest_port" value="$(var rest_port)" />
+      <param name="zenoh_endpoint" value="$(var zenoh_endpoint)" />
+      <param name="play_moves" value="$(var play_moves)" />
       <param name="joint_speed" value="$(var joint_velocity)" />
       <param name="web_root" value="$(find-pkg-share chessbot_web)/web" />
     </node>

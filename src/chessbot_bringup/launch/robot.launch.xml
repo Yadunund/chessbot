@@ -43,6 +43,11 @@
   <node_container pkg="rclcpp_components" exec="component_container" name="$(var container)"
                   namespace="" args="--executor-type events-cbg" output="screen" />
 
+  <node pkg="robot_state_publisher" exec="robot_state_publisher" name="robot_state_publisher" output="screen">
+    <param name="robot_description" value="$(var robot_description)" type="str" />
+    <param name="use_sim_time" value="$(var simulated)" />
+  </node>
+
   <!-- Simulated: Gazebo runs ros2_control itself, through the plugin in the description. -->
   <group if="$(var simulated)">
     <load_composable_node target="$(var container)">
@@ -110,11 +115,6 @@
       </load_composable_node>
     </group>
   </group>
-
-  <node pkg="robot_state_publisher" exec="robot_state_publisher" name="robot_state_publisher" output="screen">
-    <param name="robot_description" value="$(var robot_description)" type="str" />
-    <param name="use_sim_time" value="$(var simulated)" />
-  </node>
 
   <node pkg="controller_manager" exec="spawner" name="spawn_jsb" output="screen"
         args="joint_state_broadcaster --controller-manager /controller_manager --controller-manager-timeout 120 --param-file $(var controllers_file)" />

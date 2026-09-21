@@ -35,8 +35,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gzsim  # noqa: E402
 import pieces  # noqa: E402
 
-BRAIN = "http://127.0.0.1:8000"
-ROUTER = "http://127.0.0.1:8080"
+BRAIN = os.environ.get("CHESSBOT_BRAIN", "http://127.0.0.1:8000")
+ROUTER = os.environ.get("CHESSBOT_ROUTER", "http://127.0.0.1:8080")
 CONTACT_TOPIC_SUFFIX = "_contact/contact"
 GRIPPER_LINKS = ("gripper_link", "jaw_link")
 
