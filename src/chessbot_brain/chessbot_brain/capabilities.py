@@ -134,9 +134,9 @@ class ArmConfig:
     base_frame: str = "base_link"
     # The jaws' opening direction in tip_frame (matches the motion node's opening_axis).
     opening_axis: tuple[float, float, float] = (-1.0, 0.0, 0.0)
-    # How far the closed jaw tips reach past tip_frame, along the approach axis. Measured off
-    # the collision meshes by tools/dev/gripper_geometry.py.
-    touch_tip_offset_m: float = 0.0063
+    # The closed jaw tips, which are what touches a board corner. Offset from tip_frame in the
+    # description, so RViz shows it and nothing here has to carry the number.
+    touch_frame: str = "gripper_tip_link"
     # ros2_control hardware component name (the <ros2_control name="..."> in the URDF), for
     # releasing/reactivating the arm - e.g. to hand-guide it during camera calibration.
     hardware_component: str = "SO_ARM101"
@@ -287,15 +287,10 @@ class Capabilities:
         put on a corner, so that is what a touch records.
         """
         try:
-            t = self.tf_buffer.lookup_transform(self.arm.base_frame, self.arm.tip_frame, Time()).transform
+            t = self.tf_buffer.lookup_transform(self.arm.base_frame, self.arm.touch_frame, Time()).transform
         except TransformException as exc:
-            raise CapabilityError(f"no tool pose: {exc}") from exc
-        x, y, z, w = t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w
-        # Third column of the rotation matrix: the tip frame's +Z, which is the approach axis.
-        approach = (2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y))
-        return tuple(float(origin + self.arm.touch_tip_offset_m * axis) for origin, axis in
-                     ((t.translation.x, approach[0]), (t.translation.y, approach[1]),
-                      (t.translation.z, approach[2])))
+            raise CapabilityError(f"no {self.arm.touch_frame}: {exc}") from exc
+        return (float(t.translation.x), float(t.translation.y), float(t.translation.z))
 
     def camera_centre(self, topic: str = "/overhead_camera/camera_info", timeout_s: float = 3.0):
         """(cx, cy, fx) from camera_info, or None. Used as the starting point for a fit."""

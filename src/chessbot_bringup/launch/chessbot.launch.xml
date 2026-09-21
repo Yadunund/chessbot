@@ -25,6 +25,7 @@
        description="Servo tuning (PID, acceleration, torque limits) - not calibration geometry, which stays in the servos' own EEPROM regardless. Empty by default so a fresh checkout without this file still comes up; pass e.g. $(env HOME)/.chessbot/so101_joints.yaml explicitly once one exists for this rig." />
   <arg name="overhead_xyz" default="0.234 0.0 0.51" description="Overhead camera position in base_link, metres." />
   <arg name="overhead_rpy" default="3.14159 0.0 -1.5708" description="Overhead camera orientation (optical frame)." />
+  <arg name="gripper_tip_offset" default="0.0063" description="Jaw tips past the grasp point, metres; what touch-off records." />
 
   <!-- Application -->
   <arg name="rerun" default="true" description="Run the Rerun bridge." />
@@ -67,6 +68,7 @@
     <arg name="joint_config_file" value="$(var joint_config_file)" />
     <arg name="overhead_xyz" value="$(var overhead_xyz)" />
     <arg name="overhead_rpy" value="$(var overhead_rpy)" />
+    <arg name="gripper_tip_offset" value="$(var gripper_tip_offset)" />
   </include>
 
   <include file="$(find-pkg-share chessbot_bringup)/launch/app.launch.xml">

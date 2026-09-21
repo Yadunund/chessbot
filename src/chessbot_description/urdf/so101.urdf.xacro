@@ -22,6 +22,7 @@
   <xacro:arg name="color" default="0.2 0.7 0.85 1.0" />
   <xacro:arg name="overhead_xyz" default="0.234 0.0 0.51" />
   <xacro:arg name="overhead_rpy" default="3.14159 0.0 -1.5708" />
+  <xacro:arg name="gripper_tip_offset" default="0.0063" />
 
   <xacro:include filename="$(find so_arm101_description)/urdf/so_arm101_macro.xacro" />
   <xacro:include filename="$(find chessbot_description)/urdf/cameras.xacro" />
@@ -30,6 +31,16 @@
   <link name="world" />
   <xacro:so_arm101 prefix="$(arg prefix)" parent="world" color="$(arg color)"
                    x="0" y="0" z="0" roll="0" pitch="0" yaw="0" />
+
+  <!-- The IK works to gripper_frame_link, the grasp point between the jaws. The closed jaw
+       tips reach past it by this much along the approach axis (measured off the collision
+       meshes by tools/dev/gripper_geometry.py), and the tips are what touches a board corner. -->
+  <link name="$(arg prefix)gripper_tip_link" />
+  <joint name="$(arg prefix)gripper_tip_joint" type="fixed">
+    <parent link="$(arg prefix)gripper_frame_link" />
+    <child link="$(arg prefix)gripper_tip_link" />
+    <origin xyz="0 0 $(arg gripper_tip_offset)" rpy="0 0 0" />
+  </joint>
 
   <xacro:chessbot_cameras prefix="$(arg prefix)"
                           overhead_xyz="$(arg overhead_xyz)"

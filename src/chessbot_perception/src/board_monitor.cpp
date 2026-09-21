@@ -246,8 +246,14 @@ private:
     const auto colours = measure(*frame);
     std::lock_guard<std::mutex> lock(mutex_);
     if (!colours || !classifier_.has_references()) {
-      // The board cannot be located (no calibration or camera model) or has never been seen in a known position.
-      res.result = GetBoardState::Response::RESULT_NO_BOARD;
+      // Two different problems: the board cannot be located at all, or it can but nobody has
+      // ever said what its squares look like. Only the second is fixed by starting a game.
+      res.result = colours ? GetBoardState::Response::RESULT_NOT_LEARNED
+                           : GetBoardState::Response::RESULT_NO_BOARD;
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000, "%s",
+        colours ? "Square appearance has not been learned yet; start a game with the pieces in place"
+                : "Board not located: no calibration, camera model or transform yet");
       return;
     }
     std::array<Occupancy, 64> occupancy;

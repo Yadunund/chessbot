@@ -75,7 +75,9 @@ THOUGHT_NAMES = {
 BOARD_RESULT_TEXT = {
     GetBoardState.Response.RESULT_OK: "board located",
     GetBoardState.Response.RESULT_NO_IMAGE: "no recent camera frame",
-    GetBoardState.Response.RESULT_NO_BOARD: "the board isn't located, or hasn't been seen in a known position yet",
+    GetBoardState.Response.RESULT_NO_BOARD: "the board isn't located: no calibration or camera model yet",
+    GetBoardState.Response.RESULT_NOT_LEARNED:
+        "I have never seen what these squares look like. Start a game with the pieces in place so I can learn them.",
 }
 
 

@@ -10,7 +10,8 @@ float32 max_frame_age_s
 ---
 uint8 RESULT_OK=0
 uint8 RESULT_NO_IMAGE=1        # no camera frame within max_frame_age_s
-uint8 RESULT_NO_BOARD=2        # frame available, board not located
+uint8 RESULT_NO_BOARD=2        # frame available, board not located (no calibration or camera model)
+uint8 RESULT_NOT_LEARNED=3     # board located, but how its squares look has never been learned
 uint8 result
 
 BoardState state

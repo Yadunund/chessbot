@@ -34,11 +34,13 @@
        description="Servo register overrides (hardware:=real). Empty uses what calibration wrote to the servos' own EEPROM, which is where it belongs." />
   <arg name="overhead_xyz" default="0.234 0.0 0.51" description="Overhead camera position in base_link, metres." />
   <arg name="overhead_rpy" default="3.14159 0.0 -1.5708" description="Overhead camera orientation (optical frame)." />
+  <arg name="gripper_tip_offset" default="0.0063"
+       description="How far the closed jaw tips reach past the grasp point, metres. This is the point touch-off records." />
 
   <let name="simulated" value="$(eval '&quot;$(var hardware)&quot; == &quot;gazebo&quot;')" />
 
   <let name="robot_description"
-       value="$(command 'xacro $(var description_file) hardware:=$(var hardware) cameras:=$(var cameras) contact_sensors:=$(var contact_sensors) controllers_file:=$(var controllers_file) usb_port:=&quot;$(var usb_port)&quot; joint_config_file:=&quot;$(var joint_config_file)&quot; overhead_xyz:=&quot;$(var overhead_xyz)&quot; overhead_rpy:=&quot;$(var overhead_rpy)&quot;')" />
+       value="$(command 'xacro $(var description_file) hardware:=$(var hardware) cameras:=$(var cameras) contact_sensors:=$(var contact_sensors) controllers_file:=$(var controllers_file) usb_port:=&quot;$(var usb_port)&quot; joint_config_file:=&quot;$(var joint_config_file)&quot; overhead_xyz:=&quot;$(var overhead_xyz)&quot; overhead_rpy:=&quot;$(var overhead_rpy)&quot; gripper_tip_offset:=$(var gripper_tip_offset)')" />
 
   <node_container pkg="rclcpp_components" exec="component_container" name="$(var container)"
                   namespace="" args="--executor-type events-cbg" output="screen" />
