@@ -129,50 +129,17 @@
           <button value="close" class="ghost" type="submit">Close</button>
         </form>
         <ol class="steps" id="setup-steps">
-          <li data-step="board">
-            <h3>1. Mark the board</h3>
-            <p>Click the board's four outer corners in this order:
-              <strong>a1, h1, h8, a8</strong>. a1 is the square to the left of the white pieces.</p>
-            <label class="field">How far the squares sit above the table, mm
-              <input id="board-height" type="number" min="0" max="80" step="1" value="0" />
-              <span class="note">A folding board's case, or anything it rests on. Getting this
-                wrong moves the whole board and makes the arm reach through it. Changing it here
-                does not redo the math by itself - click Recompute.</span>
+          <li data-step="touch">
+            <h3>1. Measure the board</h3>
+            <p>The arm measures the board itself. Release it, then guide it by hand so the
+              <strong>closed jaw tips</strong> rest on each outer corner in turn - <strong>a1,
+              h1, h8, a8</strong>, where a1 is the square to the left of the white pieces -
+              and confirm each one. This gives where the board is, how big its squares are and
+              how high it sits, all from the arm's own kinematics.</p>
+            <label class="field">Square size, mm <span class="optional">optional</span>
+              <input id="square-size" type="number" min="0" max="80" step="0.1" value="0" />
+              <span class="note">If you know it, it is checked against what the arm measures.</span>
             </label>
-            <div class="shot">
-              <img id="setup-frame" alt="Overhead camera" />
-              <svg id="setup-marks" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
-            </div>
-            <div class="row">
-              <button id="setup-refresh" type="button">New photo</button>
-              <button id="setup-clear" type="button">Start over</button>
-              <button id="setup-recompute" type="button">Recompute</button>
-              <button id="setup-rotate" type="button" hidden>Rotate 180°</button>
-            </div>
-            <p class="result" id="board-result"></p>
-          </li>
-          <li data-step="park">
-            <h3>2. Choose where it waits <span class="optional">optional</span></h3>
-            <p>Jog the arm with the Robot controls to somewhere clear of the board, then save
-              that as the park pose.</p>
-            <button id="setup-park" type="button">Park here</button>
-            <p class="result" id="park-result"></p>
-          </li>
-          <li data-step="save">
-            <h3>3. Save</h3>
-            <p>Stores the calibration so perception and the arm agree on where the board is.
-              Marking the board is enough; anything you skip keeps what was stored before.</p>
-            <button id="setup-save" class="primary" type="button">Save calibration</button>
-            <p class="result" id="save-result"></p>
-          </li>
-          <li data-step="camera">
-            <h3>Refine the camera <span class="optional">optional</span></h3>
-            <p>The board is measured against where the description says the camera is. If that
-              is not where it actually hangs, touching the same four corners you clicked above
-              with the gripper - by hand, since the arm releases its motors so you can guide it
-              - gives the real 3D positions to fit the camera's pose against. Mark the board
-              first: these are the same points. <strong>Close the jaws and touch each corner
-              with their tips</strong>, which is the point the reading is corrected to.</p>
             <div class="row">
               <button id="camera-release" type="button">Release arm</button>
               <button id="camera-reactivate" type="button" disabled>Reactivate arm</button>
@@ -181,9 +148,40 @@
             <p class="mono" id="touch-pose">tool —</p>
             <div class="row">
               <button id="camera-confirm" type="button" disabled>Confirm touch</button>
+              <button id="setup-recompute" type="button">Recompute</button>
             </div>
-            <button id="setup-camera" type="button">Fit camera</button>
+            <p class="result" id="board-result"></p>
+          </li>
+          <li data-step="board">
+            <h3>2. Place the camera</h3>
+            <p>Click the same four corners in the photo, in the same order. Paired with where
+              the arm touched them, this is where the camera is - which is how perception knows
+              which pixels are which square. The arm does not depend on it.</p>
+            <div class="shot">
+              <img id="setup-frame" alt="Overhead camera" />
+              <svg id="setup-marks" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="row">
+              <button id="setup-refresh" type="button">New photo</button>
+              <button id="setup-clear" type="button">Start over</button>
+              <button id="setup-camera" type="button">Fit camera</button>
+              <button id="setup-rotate" type="button" hidden>Rotate 180°</button>
+            </div>
             <p class="result" id="camera-result"></p>
+          </li>
+          <li data-step="park">
+            <h3>3. Choose where it waits <span class="optional">optional</span></h3>
+            <p>Jog the arm with the Robot controls to somewhere clear of the board, then save
+              that as the park pose.</p>
+            <button id="setup-park" type="button">Park here</button>
+            <p class="result" id="park-result"></p>
+          </li>
+          <li data-step="save">
+            <h3>4. Save</h3>
+            <p>Stores the calibration so perception and the arm agree on where the board is.
+              Anything you skip keeps what was stored before.</p>
+            <button id="setup-save" class="primary" type="button">Save calibration</button>
+            <p class="result" id="save-result"></p>
           </li>
         </ol>
       </dialog>

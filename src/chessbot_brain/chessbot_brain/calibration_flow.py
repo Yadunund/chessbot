@@ -75,16 +75,6 @@ class CameraModel:
         world = self.rotation() @ direction
         return world / np.linalg.norm(world)
 
-    def on_plane(self, pixel, height: float = 0.0) -> tuple[float, float, float] | None:
-        """Where a pixel's ray meets the plane z = `height`, or None if it never does."""
-        origin = np.asarray(self.position, float)
-        direction = self.ray(pixel)
-        if abs(direction[2]) < 1e-6 or (height - origin[2]) / direction[2] <= 0.0:
-            return None
-        distance = (height - origin[2]) / direction[2]
-        point = origin + distance * direction
-        return (float(point[0]), float(point[1]), float(point[2]))
-
     def to_dict(self) -> dict:
         return {
             "position_xyz": list(self.position),
@@ -158,43 +148,36 @@ class BoardFromCorners:
     side_lengths_m: tuple[float, float, float, float]
 
 
-def board_from_corners(camera: CameraModel, corners, surface_height_m: float = 0.0) -> BoardFromCorners | None:
-    """Back-project four marked corners onto the playing surface and read off the board's pose.
-
-    `surface_height_m` is how far the squares sit above the table, which for a folding board
-    is the thickness of its case. It matters twice over, and getting it wrong is not obvious:
-    the corners are back-projected onto that plane, so assuming the table pushes the board
-    outwards from under the camera and inflates the square size; and the stored origin carries
-    the height the arm descends to, so an arm told the squares are on the table drives its
-    gripper into a board that is two centimetres higher.
-
-    Projecting the result back onto the image cannot catch this - back-projecting to the wrong
-    plane and projecting back through the same camera is self consistent, and the overlay looks
-    perfect either way. Only a ruler, or the arm touching the surface, can tell.
-    """
-    points = []
-    for pixel in corners:
-        point = camera.on_plane(pixel, surface_height_m)
-        if point is None:
-            return None
-        points.append(np.array(point, float))
+def board_from_points(points) -> BoardFromCorners | None:
+    """Board pose from its four outer corners in the robot frame, given a1, h1, h8, a8."""
+    points = [np.asarray(p, float) for p in points]
     if len(points) != 4:
         return None
-
     a1, h1, h8, a8 = points
-    height = float(a1[2])
     x_axis = ((h1 - a1) + (h8 - a8)) / 2.0
     y_axis = ((a8 - a1) + (h8 - h1)) / 2.0
     sides = (float(np.linalg.norm(h1 - a1)), float(np.linalg.norm(h8 - h1)),
              float(np.linalg.norm(a8 - h8)), float(np.linalg.norm(a1 - a8)))
     board_size = (float(np.linalg.norm(x_axis)) + float(np.linalg.norm(y_axis))) / 2.0
     return BoardFromCorners(
-        origin_xyz=(float(a1[0]), float(a1[1]), height),
+        origin_xyz=(float(a1[0]), float(a1[1]), float(np.mean([p[2] for p in points]))),
         yaw_rad=float(math.atan2(x_axis[1], x_axis[0])),
         square_size_m=board_size / 8.0,
         squareness_m=float(max(sides) - min(sides)),
         side_lengths_m=sides,
     )
+
+
+def board_from_touches(touched: dict) -> BoardFromCorners | None:
+    """Board pose measured by touching its four outer corners with the gripper.
+
+    The arm's own kinematics are the instrument, so the result carries no camera error and
+    needs no guess at how high the squares sit: the tips were on them.
+    """
+    try:
+        return board_from_points([touched[name] for name in CAMERA_TOUCH_POINTS])
+    except (KeyError, TypeError):
+        return None
 
 
 def square_centres(origin_xyz, yaw_rad: float, square_size_m: float) -> dict[str, tuple[float, float, float]]:
@@ -229,9 +212,10 @@ class Draft:
     # The board step's raw pixel clicks (a1, h1, h8, a8 order), kept so the camera step can
     # reuse them as the 2D half of its correspondences instead of asking again.
     board_corners_px: list[tuple[float, float]] | None = None
-    # How far the squares sit above the table - kept so the board pose can be recomputed from
-    # the same clicks (a corrected height, or a newly refined camera) without re-marking it.
+    # Measured from the touches: how far the squares sit above the table.
     surface_height_m: float = 0.0
+    # A known square size, if the person has one, checked against what the touches measure.
+    expected_square_size_m: float = 0.0
     # Whether the arm is released (torque off), and where the jaw tips were for each of
     # CAMERA_TOUCH_POINTS touched so far. All four are needed: the fit has no spare.
     arm_released: bool = False
@@ -251,6 +235,10 @@ class Draft:
                 "yaw_deg": round(math.degrees(self.board_yaw_rad or 0.0), 1),
                 "square_size_mm": round((self.square_size_m or 0.0) * 1000.0, 1),
                 "squareness_mm": round((self.squareness_m or 0.0) * 1000.0, 1),
+                "surface_height_mm": round(self.surface_height_m * 1000.0, 1),
+                "expected_square_size_mm": round(self.expected_square_size_m * 1000.0, 1),
+                "square_size_error_mm": (round((self.square_size_m - self.expected_square_size_m) * 1000.0, 1)
+                                         if self.expected_square_size_m and self.square_size_m else None),
             },
             "reach": {"unreachable": list(self.unreachable), "orientation": self.orientation}
             if self.board_origin_xyz is not None else None,

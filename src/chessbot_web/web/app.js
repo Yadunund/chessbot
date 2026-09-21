@@ -409,9 +409,9 @@ function drawCorners() {
     .map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="1.6" class="mark" />` +
       `<text x="${x + 2.4}" y="${y + 1}" class="mark-label">${CORNER_NAMES[i]}</text>`)
     .join("");
-  $("board-result").textContent = corners.length < 4
+  $("camera-result").textContent = corners.length < 4
     ? `Click ${CORNER_NAMES[corners.length]}.`
-    : "Working out where the board is…";
+    : "Working out where the camera is…";
 }
 
 function newPhoto() {
@@ -425,12 +425,23 @@ function renderBoardResult(data) {
   const reach = data.reach || {};
   const outOfReach = (reach.unreachable || []).length;
   $("setup-rotate").hidden = !reach.orientation;
+  const check = board.square_size_error_mm === null || board.square_size_error_mm === undefined
+    ? "" : ` (${board.square_size_error_mm > 0 ? "+" : ""}${board.square_size_error_mm} mm against the ${board.expected_square_size_mm} mm you gave)`;
   $("board-result").textContent =
     (reach.orientation ? `${reach.orientation} ` : "") +
-    `${board.square_size_mm} mm squares, turned ${board.yaw_deg}°, corners off by ${board.squareness_mm} mm. ` +
-    `Measure a square: if it is not ${board.square_size_mm} mm, the height above is wrong. ` +
+    `${board.square_size_mm} mm squares${check}, turned ${board.yaw_deg}°, ` +
+    `${board.squareness_mm} mm out of square, sitting ${board.surface_height_mm} mm above the table. ` +
     (outOfReach ? `${outOfReach} squares out of reach — move the board closer.` : "Every square is reachable.");
 }
+
+$("square-size").addEventListener("change", async () => {
+  const res = await fetch("/api/calibration/square_size", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ millimetres: Number($("square-size").value || 0) }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok && data.board) renderBoardResult(data);
+});
 
 // a1 is defined from White's seat, but the corners are marked on a photograph taken from
 // somewhere else, so marking the board half a turn out is easy and looks identical. The
@@ -439,15 +450,13 @@ async function sendCorners() {
   const natural = { w: $("setup-frame").naturalWidth, h: $("setup-frame").naturalHeight };
   const scale = Number(new URL($("setup-frame").src, location.origin).searchParams.get("scale") || 1);
   const pixels = corners.map(([x, y]) => [(x / 100) * natural.w * scale, (y / 100) * natural.h * scale]);
-  const height = Number($("board-height").value || 0) / 1000;
   const res = await fetch("/api/calibration/board", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ corners: pixels, surface_height_m: height }),
+    body: JSON.stringify({ corners: pixels }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) { $("board-result").textContent = data.detail || "Could not use those corners."; return; }
+  if (!res.ok) { $("camera-result").textContent = data.detail || "Could not use those corners."; return; }
   renderBoardResult(data);
-  // Marking again can drop touches taken against the old labels, so re-read that list.
   renderTouch(data.touch);
 }
 
@@ -480,10 +489,8 @@ $("setup-clear").addEventListener("click", newPhoto);
 // for a corrected height, or after the camera step refines the camera (also done there
 // automatically, but a person may want to force it, e.g. after a bad camera fit is retried).
 $("setup-recompute").addEventListener("click", async () => {
-  const height = Number($("board-height").value || 0) / 1000;
   const res = await fetch("/api/calibration/board/recompute", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ surface_height_m: height }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) { $("board-result").textContent = data.detail || "Could not recompute."; return; }
@@ -512,8 +519,9 @@ function renderTouch(touch) {
 async function touchAction(path) {
   const res = await fetch(path, { method: "POST" });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) { $("camera-result").textContent = data.detail || "That didn't work."; return; }
+  if (!res.ok) { $("board-result").textContent = data.detail || "That didn't work."; return; }
   renderTouch(data.touch);
+  if (data.board) renderBoardResult(data);
 }
 
 $("camera-release").addEventListener("click", () => touchAction("/api/calibration/camera/release"));
@@ -547,12 +555,14 @@ async function refreshSetup() {
   const res = await fetch("/api/calibration");
   if (!res.ok) return;
   const { draft } = await res.json();
-  if (draft.camera) {
+  // Not while corners are being clicked: that message is the running instruction.
+  if (draft.camera && (corners.length === 0 || corners.length === 4)) {
     const [x, y, z] = draft.camera.position_xyz;
     $("camera-result").textContent =
-      `Camera at ${(x * 100).toFixed(0)}, ${(y * 100).toFixed(0)}, ${(z * 100).toFixed(0)} cm ` +
-      `(fit within ${draft.camera.error_mean_px} px).`;
+      `Camera at ${(x * 100).toFixed(0)}, ${(y * 100).toFixed(0)}, ${(z * 100).toFixed(0)} cm. ` +
+      "Four corners on one plane fit any number of camera poses equally well, so treat this as approximate.";
   }
+  if (draft.board) renderBoardResult(draft);
   if (draft.park) $("park-result").textContent = `Saved: ${draft.park.joints.map((v) => v.toFixed(2)).join(", ")}`;
   renderTouch(draft.touch);
 }

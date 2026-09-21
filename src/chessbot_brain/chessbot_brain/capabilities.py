@@ -290,24 +290,6 @@ class Capabilities:
                      ((t.translation.x, approach[0]), (t.translation.y, approach[1]),
                       (t.translation.z, approach[2])))
 
-    def camera_pose(self, frame: str = "overhead_camera_link"):
-        """The camera's pose in the base frame, from the robot description via TF.
-
-        Where the camera is mounted is already part of the description, so this is what the
-        board can be measured against without any calibration of its own. Measuring the
-        camera from the gripper refines it; it is not a prerequisite.
-        """
-        try:
-            t = self.tf_buffer.lookup_transform(self.arm.base_frame, frame, Time()).transform
-        except TransformException as exc:
-            raise CapabilityError(f"no transform to {frame}: {exc}") from exc
-        x, y, z, w = t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w
-        # Roll, pitch, yaw from the quaternion, to match how the camera model is stored.
-        roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
-        pitch = math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x))))
-        yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
-        return (t.translation.x, t.translation.y, t.translation.z), (roll, pitch, yaw)
-
     def camera_centre(self, topic: str = "/overhead_camera/camera_info", timeout_s: float = 3.0):
         """(cx, cy, fx) from camera_info, or None. Used as the starting point for a fit."""
         arrived = threading.Event()

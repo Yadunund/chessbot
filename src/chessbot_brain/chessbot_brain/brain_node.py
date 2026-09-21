@@ -758,6 +758,10 @@ class BrainNode(Node):
         position = self.caps.touch_point()
         self.draft.touched[name] = position
         self.think(Thought.PERCEIVE, f"Touched {name} at {tuple(round(v, 3) for v in position)}.")
+        if len(self.draft.touched) == len(calib.CAMERA_TOUCH_POINTS):
+            self._apply_board()
+            if self.draft.board_corners_px is not None:
+                return self.calibration_camera_fit()
         return self.draft.steps()
 
     def calibration_reactivate_arm(self) -> dict:
@@ -795,48 +799,27 @@ class BrainNode(Node):
         self.draft.camera = model
         self.think(Thought.VERIFY, f"Camera at {tuple(round(v, 3) for v in model.position)}, "
                                    f"fit {model.error_mean_px:.0f} px mean over {len(touched)} points.")
-        # The board's pose was computed through whichever camera model was current when its
-        # corners were clicked - the nominal one, if this is the first refinement. Redo that
-        # math now through the just-fitted camera, so the board doesn't stay stuck on a stale
-        # projection of the same clicks.
-        self._apply_board(self.draft.surface_height_m)
         return self.draft.steps()
 
-    def camera_model(self) -> calib.CameraModel:
-        """The camera to measure the board against.
+    def calibration_board(self, corners) -> dict:
+        """Four corners marked in the camera image (a1, h1, h8, a8): where the camera is.
 
-        The refined one if it has been measured, otherwise the one the robot description
-        already carries, read through TF. Marking the board is the only step that is really
-        needed: measuring the camera makes it more accurate where the mount is not where the
-        description says.
+        The board's own pose comes from touching those corners, not from these clicks. Paired
+        with the touched positions they give the camera's pose, which is what perception needs
+        to know which pixels are which square.
         """
-        if self.draft.camera is not None:
-            return self.draft.camera
-        position, rpy = self.caps.camera_pose()
-        centre = self.caps.camera_centre()
-        frame = self.caps.camera_raw()
-        # The frame is only needed when camera_info has no principal point to give.
-        if frame is None and not (centre and centre[0]):
-            raise CapabilityError("no camera frames or camera_info yet")
-        centre_px = (centre[0], centre[1]) if centre and centre[0] else (frame.width / 2, frame.height / 2)
-        focal_px = centre[2] if centre and centre[2] > 100.0 else calib.DEFAULT_FOCAL_PX
-        return calib.CameraModel(position=position, rpy=rpy, focal_px=focal_px, centre_px=centre_px)
+        self.draft.board_corners_px = list(corners)
+        if len(self.draft.touched) == len(calib.CAMERA_TOUCH_POINTS):
+            return self.calibration_camera_fit()
+        self.think(Thought.EXPLAIN, "Corners marked. Touch them with the gripper to place the camera.")
+        return self.draft.steps()
 
-    def calibration_board(self, corners, surface_height_m: float = 0.0) -> dict:
-        """The board pose implied by four corners marked in the camera image (a1, h1, h8, a8).
-
-        The clicks are kept as the 2D half of the camera step's correspondences. Touches pair
-        with them by corner name, so a fresh set of clicks drops them rather than pairing them
-        with the wrong pixel; `calibration_rotate_board` relabels both together instead.
-        """
-        corners = list(corners)
-        if self.draft.touched and corners != self.draft.board_corners_px:
-            self.draft.touched.clear()
-            self.think(Thought.EXPLAIN,
-                       "The corners were marked again, so the touched points no longer line up "
-                       "with them. Touch them again to refine the camera.")
-        self.draft.board_corners_px = corners
-        return self._apply_board(surface_height_m)
+    def calibration_set_square_size(self, millimetres: float) -> dict:
+        """A known square size, checked against what the touches measure."""
+        self.draft.expected_square_size_m = max(0.0, float(millimetres)) / 1000.0
+        if self.draft.square_size_m:
+            return self._apply_board()
+        return self.draft.steps()
 
     def calibration_rotate_board(self) -> dict:
         """Relabel the marked corners half a turn: what was marked h8 becomes a1.
@@ -851,36 +834,33 @@ class BrainNode(Node):
         self.draft.touched = {names[(i + half) % len(names)]: self.draft.touched[name]
                               for i, name in enumerate(names) if name in self.draft.touched}
         self.think(Thought.EXPLAIN, "Corners turned half a turn: what was marked h8 is now a1.")
-        return self._apply_board(self.draft.surface_height_m)
+        return self._apply_board()
 
-    def calibration_recompute_board(self, surface_height_m: float | None = None) -> dict:
-        """Redo the board-from-corners math against the same clicked corners, no re-clicking.
+    def calibration_recompute_board(self) -> dict:
+        """Redo the board math against the touched corners."""
+        return self._apply_board()
 
-        Covers two cases: the surface height was wrong and needs correcting without marking
-        the board again, and the camera has just been refined by the touch-off step and the
-        board's pose needs to catch up to it (also done automatically after a camera fit, but
-        available here to re-run by hand too).
-        """
-        if self.draft.board_corners_px is None:
-            raise CapabilityError("mark the board's corners first")
-        height = self.draft.surface_height_m if surface_height_m is None else surface_height_m
-        return self._apply_board(height)
-
-    def _apply_board(self, surface_height_m: float) -> dict:
-        board = calib.board_from_corners(self.camera_model(), self.draft.board_corners_px, surface_height_m)
+    def _apply_board(self) -> dict:
+        board = calib.board_from_touches(self.draft.touched)
         if board is None:
-            raise CapabilityError("those corners do not point at the table")
-        self.draft.surface_height_m = surface_height_m
+            raise CapabilityError("touch all four corners first")
+        self.draft.surface_height_m = board.origin_xyz[2]
         self.draft.board_origin_xyz = board.origin_xyz
         self.draft.board_yaw_rad = board.yaw_rad
         self.draft.square_size_m = board.square_size_m
         self.draft.squareness_m = board.squareness_m
         self.draft.unreachable = self.unreachable_squares(board.origin_xyz, board.yaw_rad, board.square_size_m)
         self.draft.orientation = self.orientation_check(board.origin_xyz, board.yaw_rad, board.square_size_m)
+        expected = self.draft.expected_square_size_m
+        check = ""
+        if expected:
+            error_mm = (board.square_size_m - expected) * 1000.0
+            check = f" ({error_mm:+.1f} mm against the {expected * 1000:.1f} mm you gave)"
         self.think(
             Thought.VERIFY,
             f"Board at {tuple(round(v, 3) for v in board.origin_xyz)}, "
-            f"{board.square_size_m * 1000:.0f} mm squares, "
+            f"{board.square_size_m * 1000:.1f} mm squares{check}, "
+            f"{board.squareness_m * 1000:.1f} mm out of square, "
             f"{len(self.draft.unreachable)} squares out of reach.",
         )
         return self.draft.steps()
@@ -1027,14 +1007,12 @@ class BoardCorners(BaseModel):
     """The board's four outer corners in the camera image, in the order a1, h1, h8, a8."""
 
     corners: list[list[float]]
-    # How far the squares sit above the table: the thickness of a folding board's case.
-    surface_height_m: float = 0.0
 
 
-class RecomputeBoard(BaseModel):
-    """Redo the board math against corners already clicked. Omit to just reuse the last height."""
+class SquareSize(BaseModel):
+    """A known square size in millimetres, to check the measurement against. 0 clears it."""
 
-    surface_height_m: float | None = None
+    millimetres: float = 0.0
 
 
 def build_app(node: BrainNode) -> FastAPI:
@@ -1168,15 +1146,21 @@ def build_app(node: BrainNode) -> FastAPI:
         if len(body.corners) != 4:
             raise HTTPException(status_code=422, detail="give four corners: a1, h1, h8, a8")
         try:
-            return node.calibration_board([(float(c[0]), float(c[1])) for c in body.corners],
-                                          float(body.surface_height_m))
+            return node.calibration_board([(float(c[0]), float(c[1])) for c in body.corners])
         except CapabilityError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/calibration/board/recompute")
-    def calibration_board_recompute(body: RecomputeBoard):
+    def calibration_board_recompute():
         try:
-            return node.calibration_recompute_board(body.surface_height_m)
+            return node.calibration_recompute_board()
+        except CapabilityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/square_size")
+    def calibration_square_size(body: SquareSize):
+        try:
+            return node.calibration_set_square_size(body.millimetres)
         except CapabilityError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
