@@ -45,8 +45,8 @@
       <div class="card">
         <h2>Game</h2>
         <div class="segmented" role="radiogroup" aria-label="Your colour">
-          <label><input type="radio" name="human-side" value="white" checked /><span>You play white</span></label>
-          <label><input type="radio" name="human-side" value="black" /><span>You play black</span></label>
+          <label><input type="radio" name="human-side" value="white" checked /><span><span class="swatch white"></span>You play white</span></label>
+          <label><input type="radio" name="human-side" value="black" /><span><span class="swatch black"></span>You play black</span></label>
         </div>
         <div class="row">
           <label class="field">Robot strength
@@ -55,6 +55,16 @@
               <option value="1600">Casual</option>
               <option value="2000">Club</option>
               <option value="0" selected>Full strength</option>
+            </select>
+          </label>
+          <label class="field">Clock
+            <select id="time-control">
+              <option value="300000">5 min</option>
+              <option value="600000">10 min</option>
+              <option value="900000">15 min</option>
+              <option value="1800000" selected>30 min</option>
+              <option value="3600000">60 min</option>
+              <option value="0">No clock</option>
             </select>
           </label>
           <button id="new-game" class="primary" type="button">New game</button>

@@ -281,3 +281,13 @@ button.ghost { background: transparent; }
   .jog-pad { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .steps { padding: 12px 16px 20px; }
 }
+
+.swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; margin-right: 6px;
+  vertical-align: -1px; border: 1px solid var(--graphite); }
+.swatch.white { background: #f6f1e7; }
+.swatch.black { background: #2b2825; }
+/* Which colour each player has, said in the strip rather than left to the chip alone. */
+.player-strip .side { font: 12px/1.6 var(--mono); padding: 1px 7px; border-radius: 9999px;
+  border: 1px solid var(--button-line); }
+.player-strip .side.white { background: #f6f1e7; color: #2b2825; }
+.player-strip .side.black { background: #2b2825; color: #f6f1e7; }

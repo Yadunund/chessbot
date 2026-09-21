@@ -88,6 +88,12 @@ PACKAGE_FILE_EXTENSIONS = {".stl", ".dae", ".obj", ".glb", ".gltf", ".json"}
 JOG_BOX = ((0.08, 0.30), (-0.18, 0.18), (0.04, 0.30))
 # Most one press of a per-joint jog may turn a joint, radians (about 17 degrees).
 MAX_JOINT_JOG = 0.3
+# A held jog steps from where the last step was sent, not from where the arm has got to, so
+# the steps accumulate instead of all asking for the same place. That lead is given up if no
+# step arrives for this long, and never allowed to run further than MAX_JOG_LEAD ahead of the
+# arm, so a blocked or slow joint cannot be commanded off into the distance.
+JOG_CONTINUES_S = 0.5
+MAX_JOG_LEAD = 0.35
 
 
 PIECE_NAMES = {"p": "pawn", "n": "knight", "b": "bishop", "r": "rook", "q": "queen", "k": "king"}
@@ -122,7 +128,7 @@ class BrainNode(Node):
         self.web_root = self.declare_parameter("web_root", "").value
         self.default_robot_side = self.declare_parameter("robot_side", "black").value
         self.robot_name = self.declare_parameter("robot_name", "SO-101").value
-        self.time_control_ms = int(self.declare_parameter("time_control_ms", 600_000).value)
+        self.time_control_ms = int(self.declare_parameter("time_control_ms", 1_800_000).value)
         # Swung to the side and lying low along the board's near edge, clear of the board and
         # graveyards and out of the overhead camera's view (tools/dev/park_search.py --pan).
         self.park_joints = list(self.declare_parameter("park_joints", [-1.57, 1.59, -1.54, 0.22, 0.0]).value)
@@ -171,6 +177,8 @@ class BrainNode(Node):
         self.thoughts: collections.deque = collections.deque(maxlen=200)
         self.last_error = ""
         self.current_job = ""
+        # Where a held jog has asked the arm to get to, by kind: see `_held_jog`.
+        self._jog_holds: dict[str, tuple[float, list[float]]] = {}
         # What the guided calibration workflow has established so far.
         self.draft = calib.Draft()
 
@@ -186,6 +194,9 @@ class BrainNode(Node):
         self.mode = GameState.MODE_PROTOTYPE
         self.engine_elo = 0
         self._reset_game(self.default_robot_side)
+        # A game only counts as under way once one has been started, so resuming after a
+        # failure during setup does not hand the robot a turn it was never taking.
+        self.game_started = False
         self.phase = GameState.PHASE_IDLE
         self.publish_state()
         engine_text = "Stockfish" if self.engine else "a placeholder engine that checks no rules"
@@ -309,6 +320,7 @@ class BrainNode(Node):
                 "turn": self.side_to_move(),
                 "robot_side": self.robot_side,
                 "play_moves": self.play_moves,
+                "time_control_ms": self.time_control_ms,
                 "robot_name": self.robot_name,
                 "moves": list(self.moves),
                 # Pieces the robot has captured, where it put them (board frame, in squares).
@@ -388,10 +400,14 @@ class BrainNode(Node):
             raise CapabilityError("no calibration in the key-value store (is the calibration node running?)")
         return BoardGeometry.from_calibration(data)
 
-    def job_new_game(self, robot_side: str, engine_elo: int):
+    def job_new_game(self, robot_side: str, engine_elo: int, time_control_ms: int | None = None):
+        if time_control_ms:
+            self.time_control_ms = int(time_control_ms)
         self._reset_game(robot_side)
+        self.game_started = True
         self.engine_elo = engine_elo
-        self.think(Thought.DECIDE, f"New game. I play {robot_side}.")
+        minutes = self.time_control_ms / 60_000
+        self.think(Thought.DECIDE, f"New game. I play {robot_side}, {minutes:g} minutes each.")
         self.set_phase(GameState.PHASE_SETUP)
         self.job_park()
         if robot_side == "white":
@@ -408,6 +424,7 @@ class BrainNode(Node):
             self.think(Thought.RECOVER, f"Not a valid FEN: {exc}")
             return
         self._reset_game(robot_side)
+        self.game_started = True
         with self._lock:
             self.board = board
         self.think(Thought.EXPLAIN, f"Dev: position set to {board.fen()}.")
@@ -670,8 +687,31 @@ class BrainNode(Node):
         self.think(Thought.ACT, "Arm parked.")
 
     def job_resume(self):
-        self.think(Thought.RECOVER, "Resumed by operator.")
-        self.set_phase(GameState.PHASE_HUMAN_TURN)
+        """Hand control back after a failure, to whoever actually has the move.
+
+        The arm is put somewhere known first, because a failure can leave it anywhere, jaws
+        shut on a piece. Where it goes next is read from the position rather than assumed: a
+        move that failed half way is still the robot's to make, and handing that turn to the
+        person would leave the game and the board disagreeing for the rest of it.
+        """
+        if not self.game_started:
+            self.think(Thought.RECOVER, "Nothing to resume; no game is under way.")
+            self.set_phase(GameState.PHASE_IDLE)
+            return
+        if self.result != GameState.RESULT_IN_PROGRESS:
+            self.set_phase(GameState.PHASE_GAME_OVER)
+            return
+
+        skills.park(self.caps, self.park_pose(), self.geometry_if_calibrated())
+        self.caps.gripper(self.caps.arm.gripper_open)
+        if self.side_to_move() != self.robot_side:
+            self.think(Thought.RECOVER, "Resumed. It is your move.")
+            self._switch_clock(self.side_to_move())
+            self.set_phase(GameState.PHASE_HUMAN_TURN)
+            return
+        self.think(Thought.RECOVER, "Resumed, and the move is still mine. Check the board matches "
+                                    "the position shown before I play it again.")
+        self._robot_turn()
 
     # --- manual control, for bringing a real rig up ----------------------------------
     #
@@ -697,11 +737,28 @@ class BrainNode(Node):
             self.caps.stream(self.caps.jog_trajectory(solution, speed_pct / 100.0))
 
     def job_jog(self, axis: str, delta_m: float, speed_pct: float = 100.0):
-        (x, y, z), yaw = self.caps.tool_pose()
         step = {"x": (delta_m, 0.0, 0.0), "y": (0.0, delta_m, 0.0), "z": (0.0, 0.0, delta_m)}.get(axis)
         if step is None:
             raise CapabilityError(f"unknown axis {axis!r}")
-        self.job_move_tool((x + step[0], y + step[1], z + step[2]), math.degrees(yaw), speed_pct)
+        (x, y, z), yaw = self.caps.tool_pose()
+        held = self._held_jog("tool")
+        if held is not None:
+            base = [min(max(h, a - MAX_JOG_LEAD), a + MAX_JOG_LEAD) for h, a in zip(held, (x, y, z))]
+        else:
+            base = [x, y, z]
+        target = tuple(b + d for b, d in zip(base, step))
+        self.job_move_tool(target, math.degrees(yaw), speed_pct)
+        self._hold_jog("tool", list(target))
+
+    def _held_jog(self, key: str):
+        """The target the last step of a held jog asked for, while the hold is still going."""
+        held = self._jog_holds.get(key)
+        if held is None or time.monotonic() - held[0] > JOG_CONTINUES_S:
+            return None
+        return held[1]
+
+    def _hold_jog(self, key: str, target: list[float]) -> None:
+        self._jog_holds[key] = (time.monotonic(), target)
 
     def job_jog_joint(self, joint: str, delta_rad: float, speed_pct: float = 100.0):
         """Turn one joint by a small amount.
@@ -715,9 +772,14 @@ class BrainNode(Node):
         if joint not in names:
             raise CapabilityError(f"unknown joint {joint!r}")
         step = max(-MAX_JOINT_JOG, min(MAX_JOINT_JOG, float(delta_rad)))
-        target = self.caps.joint_positions()
-        target[names.index(joint)] += step
+        measured = self.caps.joint_positions()
+        held = self._held_jog("joints")
+        target = list(held) if held is not None else list(measured)
+        index = names.index(joint)
+        target[index] = min(max(target[index], measured[index] - MAX_JOG_LEAD),
+                            measured[index] + MAX_JOG_LEAD) + step
         self.caps.stream(self.caps.jog_trajectory(target, speed_pct / 100.0))
+        self._hold_jog("joints", target)
 
     def job_gripper(self, position: float):
         self.caps.gripper(position)
@@ -959,6 +1021,8 @@ class BrainNode(Node):
 class NewGame(BaseModel):
     robot_side: str = "black"
     engine_elo: int = 0
+    # Each side's clock. Omitted keeps whatever the last game used.
+    time_control_ms: int | None = None
 
 
 class PressClock(BaseModel):
@@ -1045,7 +1109,7 @@ def build_app(node: BrainNode) -> FastAPI:
     def new_game(body: NewGame):
         if body.robot_side not in ("white", "black"):
             raise HTTPException(status_code=422, detail="robot_side must be white or black")
-        return submit("new_game", node.job_new_game, body.robot_side, body.engine_elo)
+        return submit("new_game", node.job_new_game, body.robot_side, body.engine_elo, body.time_control_ms)
 
     @app.post("/api/press_clock")
     def press_clock(body: PressClock):
@@ -1061,6 +1125,8 @@ def build_app(node: BrainNode) -> FastAPI:
 
     @app.post("/api/resume")
     def resume():
+        if node.phase != GameState.PHASE_NEEDS_HELP:
+            raise HTTPException(status_code=409, detail="the robot is not waiting for help")
         return submit("resume", node.job_resume)
 
     @app.post("/api/dev/set_position")

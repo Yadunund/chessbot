@@ -136,8 +136,10 @@ function renderClock(humanSide) {
 function renderStrips(humanSide) {
   const title = (side) => side[0].toUpperCase() + side.slice(1);
   $("robot-name").textContent = state.robot_name || "Robot";
-  $("robot-side").textContent = `· ${title(state.robot_side)}`;
-  $("human-side").textContent = `· ${title(humanSide)}`;
+  $("robot-side").textContent = `plays ${title(state.robot_side)}`;
+  $("human-side").textContent = `plays ${title(humanSide)}`;
+  $("robot-side").className = `side ${state.robot_side}`;
+  $("human-side").className = `side ${humanSide}`;
   $("robot-chip").className = `chip ${state.robot_side}`;
   $("human-chip").className = `chip ${humanSide}`;
   const robotActive = WORKING.has(state.phase) || state.clock.running === state.robot_side;
@@ -162,10 +164,10 @@ function renderCapabilities(caps) {
 function renderThoughts(thoughts) {
   const list = $("thoughts");
   list.innerHTML = "";
-  for (const t of thoughts) addThought(t, false);
+  for (const t of thoughts) addThought(t);
 }
 
-function addThought(t, scroll = true) {
+function addThought(t) {
   const li = document.createElement("li");
   const kind = document.createElement("span");
   kind.className = "kind";
@@ -175,7 +177,6 @@ function addThought(t, scroll = true) {
   if (t.model_generated) text.className = "model";
   li.append(kind, text);
   $("thoughts").append(li);
-  if (scroll) li.scrollIntoView({ block: "nearest" });
 }
 
 // --- data ----------------------------------------------------------------------------
@@ -265,6 +266,7 @@ $("new-game").addEventListener("click", () => {
   post("/api/new_game", {
     robot_side: human === "white" ? "black" : "white",
     engine_elo: Number($("strength").value),
+    time_control_ms: Number($("time-control").value),
   });
 });
 $("park").addEventListener("click", () => post("/api/park"));
