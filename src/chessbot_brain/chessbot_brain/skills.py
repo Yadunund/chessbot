@@ -17,12 +17,6 @@ from chessbot_brain.board import MoveEffects, piece_colour
 from chessbot_brain.capabilities import Capabilities, CapabilityError, tool_down
 from chessbot_brain.geometry import PIECE_HEIGHTS, BoardGeometry, jaw_clearances
 
-# Heights of the grasp point above the playing surface, metres. Every piece is gripped at
-# GRASP_HEIGHT (high enough that a tilted tool at the far rank keeps its heel off the
-# board), so its base hangs that far below the grasp point; placing releases it
-# PLACE_DROP higher, so a piece that slipped in the jaws is never pushed into the board.
-GRASP_HEIGHT = 0.018
-PLACE_DROP = 0.003
 # Hover heights tried in order. The highest clears every piece, but close to the
 # robot's base it is out of reach, so the arm hovers lower there.
 TRANSIT_HEIGHTS = (0.08, 0.065, 0.05)
@@ -118,7 +112,8 @@ def pick(caps: Capabilities, geometry: BoardGeometry, xyz, others_xyz: Sequence)
     yaws = grasp_yaws(caps, xyz, others_xyz, caps.arm.pick_offset)
     caps.gripper(caps.arm.gripper_open)
     height, yaw = move_above(caps, geometry, xyz, yaws, caps.arm.pick_offset)
-    descend_and(caps, tool_point(xyz, yaw, caps.arm.pick_offset), yaw, caps.arm.gripper_closed, height, GRASP_HEIGHT)
+    descend_and(caps, tool_point(xyz, yaw, caps.arm.pick_offset), yaw, caps.arm.gripper_closed, height,
+                caps.arm.grasp_height)
 
 
 def place(caps: Capabilities, geometry: BoardGeometry, xyz, others_xyz: Sequence):
@@ -126,7 +121,8 @@ def place(caps: Capabilities, geometry: BoardGeometry, xyz, others_xyz: Sequence
     yaws = grasp_yaws(caps, xyz, others_xyz, caps.arm.place_offset)
     height, yaw = move_above(caps, geometry, xyz, yaws, caps.arm.place_offset)
     descend_and(
-        caps, tool_point(xyz, yaw, caps.arm.place_offset), yaw, caps.arm.gripper_open, height, GRASP_HEIGHT + PLACE_DROP
+        caps, tool_point(xyz, yaw, caps.arm.place_offset), yaw, caps.arm.gripper_open, height,
+        caps.arm.grasp_height + caps.arm.place_drop,
     )
 
 

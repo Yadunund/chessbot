@@ -118,6 +118,13 @@ class ArmConfig:
     # The grasp point is on the fixed jaw's inner surface. To pick, it stops this far
     # from the piece's centre (piece radius plus clearance); to place, one piece
     # radius, so the released piece lands centred.
+    # Height of the grasp point above the playing surface, metres. High enough that a tilted
+    # tool at the far rank keeps its heel off the board, and that the arm sagging under its own
+    # weight (see the controller tolerances) still leaves the jaws above the squares.
+    grasp_height: float = 0.028
+    # Placing releases this much higher again, so a piece that slipped in the jaws is never
+    # pushed into the board.
+    place_drop: float = 0.003
     pick_offset: float = 0.010
     place_offset: float = 0.0075
     piece_radius: float = 0.0075

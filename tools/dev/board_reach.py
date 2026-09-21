@@ -16,12 +16,15 @@ from ament_index_python.packages import get_package_share_directory
 
 from chessbot_brain.board import square_name
 from chessbot_brain.geometry import BoardGeometry
-from chessbot_brain.skills import GRASP_HEIGHT, TRANSIT_HEIGHTS
+from chessbot_brain.capabilities import ArmConfig
+from chessbot_brain.skills import TRANSIT_HEIGHTS
 from chessbot_calibration.profile import CalibrationProfile
 from chessbot_motion.kinematics import ArmKinematics
 
 JOINTS = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_flex_joint", "wrist_flex_joint", "wrist_roll_joint"]
 DOWN = np.array([0.0, 0.0, -1.0])
+# The brain reads this from its grasp_height parameter; this is the same default.
+GRASP_HEIGHT = ArmConfig.grasp_height
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--near-edge", type=float, default=None, help="board near edge from the pan axis (m); default: calibration")

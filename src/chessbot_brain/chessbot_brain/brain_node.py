@@ -144,6 +144,8 @@ class BrainNode(Node):
             # side (tools/dev/gripper_geometry.py). Closing commands past contact so it grips.
             gripper_open=float(self.declare_parameter("gripper_open", 0.24).value),
             gripper_closed=float(self.declare_parameter("gripper_closed", 0.05).value),
+            grasp_height=float(self.declare_parameter("grasp_height", 0.028).value),
+            place_drop=float(self.declare_parameter("place_drop", 0.003).value),
             pick_offset=float(self.declare_parameter("pick_offset", 0.010).value),
             place_offset=float(self.declare_parameter("place_offset", 0.0075).value),
             joint_speed=float(self.declare_parameter("joint_speed", 1.6).value),
@@ -244,17 +246,35 @@ class BrainNode(Node):
         self.publish_state()
 
     def publish_board_markers(self):
-        """The calibrated board as markers, for RViz."""
-        geometry = self.geometry_if_calibrated()
-        if geometry is None:
-            return
-        side = geometry.square_size_m * 8.0
-        centre = geometry.board_to_robot(side / 2.0, side / 2.0)
-        half_yaw = geometry.yaw_rad / 2.0
+        """The board as markers, for RViz: the one just measured, else the one stored.
+
+        Showing the draft is the point of it - touching the corners is when you want to see
+        where the robot thinks the board is, not after committing that guess to the profile.
+        """
+        if self.draft.board_origin_xyz is not None and self.draft.square_size_m:
+            board_origin = self.draft.board_origin_xyz
+            yaw = self.draft.board_yaw_rad or 0.0
+            square = self.draft.square_size_m
+            frame = self.caps.arm.base_frame
+            saved = self.draft.saved
+        else:
+            geometry = self.geometry_if_calibrated()
+            if geometry is None:
+                return
+            board_origin, yaw, square, frame = (geometry.origin_xyz, geometry.yaw_rad,
+                                                geometry.square_size_m, geometry.frame_id)
+            saved = True
+        side = square * 8.0
+        cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+        half = side / 2.0
+        centre = (board_origin[0] + cos_yaw * half - sin_yaw * half,
+                  board_origin[1] + sin_yaw * half + cos_yaw * half,
+                  board_origin[2])
+        half_yaw = yaw / 2.0
         markers = MarkerArray()
 
         surface = Marker()
-        surface.header.frame_id = geometry.frame_id
+        surface.header.frame_id = frame
         surface.ns, surface.id, surface.type, surface.action = "board", 0, Marker.CUBE, Marker.ADD
         surface.pose.position.x, surface.pose.position.y, surface.pose.position.z = centre
         surface.pose.orientation.z, surface.pose.orientation.w = math.sin(half_yaw), math.cos(half_yaw)
@@ -263,25 +283,25 @@ class BrainNode(Node):
         markers.markers.append(surface)
 
         label = Marker()
-        label.header.frame_id = geometry.frame_id
+        label.header.frame_id = frame
         label.ns, label.id, label.type, label.action = "board", 1, Marker.TEXT_VIEW_FACING, Marker.ADD
         label.pose.position.x, label.pose.position.y = centre[0], centre[1]
         label.pose.position.z = centre[2] + 0.05
         label.pose.orientation.w = 1.0
         label.scale.z = 0.015
         label.color.r = label.color.g = label.color.b = label.color.a = 1.0
-        label.text = (f"{side * 1000:.0f} mm board, {geometry.square_size_m * 1000:.1f} mm squares, "
-                      f"{math.degrees(geometry.yaw_rad):.1f} deg")
+        label.text = (f"{side * 1000:.0f} mm board, {square * 1000:.1f} mm squares, "
+                      f"{math.degrees(yaw):.1f} deg" + ("" if saved else " (not saved)"))
         markers.markers.append(label)
 
-        origin = Marker()
-        origin.header.frame_id = geometry.frame_id
-        origin.ns, origin.id, origin.type, origin.action = "board", 2, Marker.SPHERE, Marker.ADD
-        origin.pose.position.x, origin.pose.position.y, origin.pose.position.z = geometry.origin_xyz
-        origin.pose.orientation.w = 1.0
-        origin.scale.x = origin.scale.y = origin.scale.z = 0.008
-        origin.color.r, origin.color.a = 1.0, 1.0
-        markers.markers.append(origin)
+        a1 = Marker()
+        a1.header.frame_id = frame
+        a1.ns, a1.id, a1.type, a1.action = "board", 2, Marker.SPHERE, Marker.ADD
+        a1.pose.position.x, a1.pose.position.y, a1.pose.position.z = board_origin
+        a1.pose.orientation.w = 1.0
+        a1.scale.x = a1.scale.y = a1.scale.z = 0.008
+        a1.color.r, a1.color.a = 1.0, 1.0
+        markers.markers.append(a1)
 
         self.board_marker_pub.publish(markers)
 
@@ -921,6 +941,7 @@ class BrainNode(Node):
         if board is None:
             raise CapabilityError("touch all four corners first")
         self.draft.surface_height_m = board.origin_xyz[2]
+        self.draft.saved = False
         self.draft.board_origin_xyz = board.origin_xyz
         self.draft.board_yaw_rad = board.yaw_rad
         self.draft.square_size_m = board.square_size_m
@@ -964,7 +985,7 @@ class BrainNode(Node):
         out = []
         for square, (x, y, _z) in calib.square_centres(origin_xyz, yaw_rad, square_size_m).items():
             try:
-                self.caps.solve_ik((x, y, skills.GRASP_HEIGHT), tool_down(0.0))
+                self.caps.solve_ik((x, y, self.caps.arm.grasp_height), tool_down(0.0))
             except CapabilityError:
                 out.append(square)
         return out
@@ -993,6 +1014,7 @@ class BrainNode(Node):
         )
         if self.draft.park_joints:
             self.park_joints = list(self.draft.park_joints)
+        self.draft.saved = True
         self.think(Thought.VERIFY, f"Calibration saved to {result.profile_path}.")
         return {"ok": result.ok, "message": result.message, "profile_path": result.profile_path,
                 "steps": self.draft.steps()}

@@ -23,7 +23,7 @@ uses: [gripper, solve_ik, joint_move_trajectory, execute, plan_cartesian]
 
 1. Open the gripper.
 2. Joint-space move to hover above the point, as high as is reachable: 8 cm, else 6.5 cm, else 5 cm. Close to the robot's base the higher hover is out of reach.
-3. Straight line down to `GRASP_HEIGHT` (1.5 cm).
+3. Straight line down to the arm's `grasp_height` above the squares (2.8 cm by default).
 4. Close the gripper. A stall on the piece counts as done.
 5. Straight line back up to the same hover height.
 

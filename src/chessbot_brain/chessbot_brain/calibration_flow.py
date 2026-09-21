@@ -218,6 +218,8 @@ class Draft:
     unreachable: list[str] = field(default_factory=list)
     # Empty when the board is the right way round, otherwise what is wrong with it.
     orientation: str = ""
+    # Whether what the draft holds has been written to the stored profile.
+    saved: bool = False
     # The board step's raw pixel clicks (a1, h1, h8, a8 order), kept so the camera step can
     # reuse them as the 2D half of its correspondences instead of asking again.
     board_corners_px: list[tuple[float, float]] | None = None
