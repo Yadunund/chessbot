@@ -25,6 +25,8 @@ SEED_WEIGHT = 0.003
 MAX_JOINT_STEP = 0.12
 # How far inside its limits each joint is kept, radians.
 LIMIT_MARGIN = 0.05
+# Moves up to this are solved from the seed alone, keeping the arm in its current branch.
+LOCAL_STEP_M = 0.03
 # A target this far from anything the arm can reach, by the sampled scan, is refused without
 # attempting to solve. Generous: the scan is coarse, so this only catches the hopeless cases.
 OUT_OF_REACH_M = 0.12
@@ -216,6 +218,22 @@ class ArmKinematics:
         seed = np.asarray(seed, dtype=float)
         target_position = np.asarray(target_position, dtype=float)
         target_approach = np.asarray(target_approach, dtype=float) / np.linalg.norm(target_approach)
+
+        # A solve from the seed costs ~12 ms against ~380 ms for the full search below, and
+        # wins it anyway when it succeeds, since successes are ranked by distance from the
+        # seed. Short moves also get the tilted pass: a 5-DoF arm is often a few degrees off
+        # vertical, and over a longer move another seed may hold the tool straighter.
+        step = float(np.linalg.norm(target_position - self.forward(seed)[0]))
+        tolerances = [np.radians(3.0)]
+        if step <= LOCAL_STEP_M:
+            tolerances.append(self.max_approach_tilt_rad)
+        for tolerance in tolerances:
+            direct = self.solve(
+                target_position, target_approach, seed,
+                approach_tolerance_rad=tolerance, target_opening=target_opening,
+            )
+            if direct.success:
+                return direct
 
         candidates = rng.uniform(self.lower, self.upper, size=(samples, len(self.joint_names)))
         distances = np.array([np.linalg.norm(self.forward(q)[0] - target_position) for q in candidates])

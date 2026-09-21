@@ -127,14 +127,15 @@ class ArmConfig:
     base_frame: str = "base_link"
     # The jaws' opening direction in tip_frame (matches the motion node's opening_axis).
     opening_axis: tuple[float, float, float] = (-1.0, 0.0, 0.0)
+    # How far the closed jaw tips reach past tip_frame, along the approach axis. Measured off
+    # the collision meshes by tools/dev/gripper_geometry.py.
+    touch_tip_offset_m: float = 0.0063
     # ros2_control hardware component name (the <ros2_control name="..."> in the URDF), for
     # releasing/reactivating the arm - e.g. to hand-guide it during camera calibration.
     hardware_component: str = "SO_ARM101"
     # ros2_control controller name commanding the arm, for the same release/reactivate cycle.
     controller: str = "arm_controller"
-    # The gripper's controller. Its joint is in the same hardware component, so dropping that
-    # component takes the gripper's command interface with it: both controllers are switched
-    # together or the jaws come back dead.
+    # Its joint shares the arm's hardware component, so both controllers switch together.
     gripper_controller: str = "gripper_controller"
 
 
@@ -154,6 +155,9 @@ class Capabilities:
         self.cartesian = node.create_client(GetCartesianPath, "/compute_cartesian_path")
         self.arm_action = ActionClient(node, FollowJointTrajectory, "/arm_controller/follow_joint_trajectory")
         self.gripper_action = ActionClient(node, ParallelGripperCommand, "/gripper_controller/gripper_cmd")
+        # The controller's topic interface, for commands that must not wait. See `stream`.
+        self.arm_stream = node.create_publisher(
+            JointTrajectory, f"/{self.arm.controller}/joint_trajectory", 10)
         self.calibrate_action = ActionClient(node, Calibrate, "/calibration/calibrate")
         self.set_calibration_client = node.create_client(SetCalibration, "/calibration/set")
         self.switch_controller_client = node.create_client(SwitchController, "/controller_manager/switch_controller")
@@ -269,6 +273,23 @@ class Capabilities:
             self.node.destroy_subscription(subscription)
         return frames[0] if frames else None
 
+    def touch_point(self) -> tuple[float, float, float]:
+        """Where the closed jaw tips are, in the base frame.
+
+        `tool_pose` reports the grasp point between the jaws. The tips are what a person can
+        put on a corner, so that is what a touch records.
+        """
+        try:
+            t = self.tf_buffer.lookup_transform(self.arm.base_frame, self.arm.tip_frame, Time()).transform
+        except TransformException as exc:
+            raise CapabilityError(f"no tool pose: {exc}") from exc
+        x, y, z, w = t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w
+        # Third column of the rotation matrix: the tip frame's +Z, which is the approach axis.
+        approach = (2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y))
+        return tuple(float(origin + self.arm.touch_tip_offset_m * axis) for origin, axis in
+                     ((t.translation.x, approach[0]), (t.translation.y, approach[1]),
+                      (t.translation.z, approach[2])))
+
     def camera_pose(self, frame: str = "overhead_camera_link"):
         """The camera's pose in the base frame, from the robot description via TF.
 
@@ -305,9 +326,7 @@ class Capabilities:
         if not infos:
             return None
         info = infos[0]
-        # P describes the rectified image, K the raw one. The topic these measurements are
-        # taken from is rectified, so P is the matrix that matches the pixels being measured;
-        # on a lens with no distortion the two are equal anyway.
+        # P describes the rectified image these measurements are taken from; K the raw one.
         if float(info.p[0]) > 0.0:
             return (float(info.p[2]), float(info.p[6]), float(info.p[0]))
         return (float(info.k[2]), float(info.k[5]), float(info.k[0]))
@@ -396,6 +415,42 @@ class Capabilities:
         trajectory.points = [start, end]
         return trajectory
 
+    def joint_path_trajectory(self, waypoints: list[list[float]], speed_fraction: float = 1.0) -> JointTrajectory:
+        """One trajectory through several joint waypoints, without stopping at each.
+
+        Intermediate waypoints carry the centred difference of the segments either side, so
+        the controller splines through them. The ends are at rest.
+        """
+        path = [self.joint_positions(), *[list(w) for w in waypoints]]
+        speed = max(0.05, min(1.0, speed_fraction)) * self.arm.joint_speed
+        durations = [max(0.05, max(abs(a - b) for a, b in zip(first, second)) / speed)
+                     for first, second in zip(path, path[1:])]
+
+        trajectory = JointTrajectory()
+        trajectory.joint_names = list(self.arm.joints)
+        elapsed = 0.0
+        for index, position in enumerate(path):
+            if index == 0 or index == len(path) - 1:
+                velocities = [0.0] * len(position)
+            else:
+                before, after = durations[index - 1], durations[index]
+                velocities = [(nxt - prv) / (before + after)
+                              for prv, nxt in zip(path[index - 1], path[index + 1])]
+            if index > 0:
+                elapsed += durations[index - 1]
+            trajectory.points.append(JointTrajectoryPoint(
+                positions=list(position), velocities=velocities,
+                time_from_start=Duration(seconds=elapsed).to_msg()))
+        return trajectory
+
+    def stream(self, trajectory: JointTrajectory) -> None:
+        """Publish a trajectory and return, for commands meant to be replaced mid-motion.
+
+        Each publication supersedes the last, splined from the velocity the arm has then,
+        which is what makes a held jog continuous. `execute` waits instead.
+        """
+        self.arm_stream.publish(trajectory)
+
     def jog_trajectory(self, target: list[float], speed_fraction: float = 1.0) -> JointTrajectory:
         """A single-waypoint trajectory, for jogging and hand-guide-assist motion.
 
@@ -422,13 +477,10 @@ class Capabilities:
     def release_arm(self, timeout_s: float = 10.0) -> None:
         """Stop the arm controller and drop its hardware component to inactive.
 
-        The hardware component's on_deactivate is what actually cuts torque (checked against
-        the real driver, not assumed here); state interfaces stay live regardless of lifecycle
-        state, so tool_pose keeps tracking wherever the arm is hand-guided to.
-
-        Both controllers go down, not just the arm's: the gripper's joint belongs to the same
-        component, so its command interface disappears with it either way. Taking it down
-        deliberately is what makes `reactivate_arm` able to bring it back.
+        The hardware component's on_deactivate is what cuts torque. State interfaces stay
+        live while it is inactive, so tool_pose keeps tracking a hand-guided arm. The gripper
+        shares the component, so its controller goes down here and comes back in
+        `reactivate_arm`.
         """
         self._switch_controller(
             deactivate=[self.arm.controller, self.arm.gripper_controller], timeout_s=timeout_s)

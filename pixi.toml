@@ -67,6 +67,7 @@ ros-lyrical-rclcpp-components = "*"
 ros-lyrical-rclcpp-action = "*"
 ros-lyrical-rmw-zenoh-cpp = "*"
 ros-lyrical-robot-state-publisher = "*"
+ros-lyrical-rviz2 = "*"
 ros-lyrical-tf2-ros = "*"
 ros-lyrical-control-msgs = "*"
 # The Rerun bridge logs these as spatial archetypes (paths, occupancy grids, markers).
@@ -123,7 +124,7 @@ RMW_IMPLEMENTATION = "rmw_zenoh_cpp"
 # Gazebo looks for system plugins (gz_ros2_control) here; it does not search the env's lib dir.
 GZ_SIM_SYSTEM_PLUGIN_PATH = "${CONDA_PREFIX}/lib"
 # Nodes connect to the chessbot router rather than scouting for one.
-ZENOH_CONFIG_OVERRIDE = 'connect/endpoints=["tcp/127.0.0.1:7447"];scouting/multicast/enabled=false'
+ZENOH_CONFIG_OVERRIDE = 'connect/endpoints=["tcp/127.0.0.1:7447"];scouting/multicast/enabled=false;transport/shared_memory/enabled=true'
 
 # ROS message packages export their Python binding libraries, and anything that links one
 # without using it fails to dlopen later with "undefined symbol: PyLong_FromLong" (the
@@ -148,6 +149,7 @@ router = { cmd = "bash -c 'exec zenohd -c config/zenoh/router.json5 --plugin-sea
 real = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup chessbot.launch.xml hardware:=real \"$@\"' --" }
 sim = { cmd = "bash -c 'source install/setup.bash && exec ros2 launch chessbot_bringup chessbot.launch.xml hardware:=gazebo \"$@\"' --" }
 # Regenerate the Rerun layout (src/chessbot_bringup/config/chessbot.rbl) after editing its script.
+rviz = { cmd = "bash -c 'source install/setup.bash && exec rviz2 -d src/chessbot_bringup/config/chessbot.rviz'" }
 rerun-blueprint = { cmd = "python src/chessbot_bringup/rerun/make_blueprint.py" }
 # Motion scenarios in simulation (start with: pixi run sim cameras:=false viewer:=none).
 sim-test = { cmd = "bash -c 'source install/setup.bash && exec python tools/sim/suite.py \"$@\"' --" }

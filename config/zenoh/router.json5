@@ -24,7 +24,7 @@
       },
     },
     shared_memory: {
-      enabled: false,
+      enabled: true,
     },
   },
   adminspace: {

@@ -140,12 +140,15 @@ def park(caps: Capabilities, park_joints: list[float], geometry: BoardGeometry |
     """Lift clear, swing the base to the park side at that height, then settle into the pose.
 
     Swinging first keeps the arm high while it crosses the board, since the park pose is low.
+    Swing and settle are one trajectory through a waypoint; as two goals the arm stops at the
+    waypoint, which reads as the base turning on its own and the arm dropping afterwards.
     """
     lift_if_low(caps, geometry)
     current = caps.joint_positions()
     if abs(current[0] - park_joints[0]) > 0.05:
-        caps.execute(caps.joint_move_trajectory([park_joints[0], *current[1:]]))
-    caps.execute(caps.joint_move_trajectory(park_joints))
+        caps.execute(caps.joint_path_trajectory([[park_joints[0], *current[1:]], park_joints]))
+    else:
+        caps.execute(caps.joint_move_trajectory(park_joints))
 
 
 def execute_chess_move(

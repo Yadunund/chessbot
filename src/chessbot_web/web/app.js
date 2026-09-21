@@ -297,24 +297,22 @@ async function refreshToolPose() {
   }
 }
 
-// Press-and-hold jogging: a self-pacing loop that sends the next request only once the
-// previous one resolves (never more than one in flight, matching the backend's one-job-at-a-
-// time model), and stops the instant the pointer is released. A "still moving" response isn't
-// an error - it just means try again right away. A request that fails outright (a network
-// hiccup, not just a busy backend) is not either - the loop backs off and keeps trying for as
-// long as the button is actually held, rather than dying silently and leaving the hold looking
-// like it did nothing.
+// Press-and-hold jogging. Each tick returns as soon as the step is published, so the next
+// lands while the arm is still moving; nothing else paces the loop, so it is paced here.
+const JOG_TICK_MS = 60;
+const JOG_BUSY_MS = 40;
+const JOG_ERROR_MS = 150;
+
 async function postJog(path, body) {
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (res.status === 409) return false;
-  const ok = res.ok;
-  if (!ok) {
+  if (res.status === 409) return "busy";
+  if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
     $("error").textContent = detail.detail || `${path} failed (${res.status})`;
-  } else {
-    $("error").textContent = "";
+    return "error";
   }
-  return ok;
+  $("error").textContent = "";
+  return "ok";
 }
 
 let jogHeld = null; // the button currently held, or null
@@ -336,15 +334,16 @@ function bindHold(button, sendOne) {
     jogHeld = button;
     (async () => {
       while (jogHeld === button) {
-        let ok = false;
+        let outcome = "error";
         try {
-          ok = await sendOne();
+          outcome = await sendOne();
         } catch (err) {
           console.warn("jog request failed", err);
         }
-        if (ok) throttledRefreshToolPose();
+        if (outcome === "ok") throttledRefreshToolPose();
         if (jogHeld !== button) break;
-        if (!ok) await new Promise((resolve) => setTimeout(resolve, 150)); // back off, busy or failed
+        const wait = outcome === "ok" ? JOG_TICK_MS : outcome === "busy" ? JOG_BUSY_MS : JOG_ERROR_MS;
+        await new Promise((resolve) => setTimeout(resolve, wait));
       }
     })();
   });

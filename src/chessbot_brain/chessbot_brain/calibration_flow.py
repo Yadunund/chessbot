@@ -232,10 +232,8 @@ class Draft:
     # How far the squares sit above the table - kept so the board pose can be recomputed from
     # the same clicks (a corrected height, or a newly refined camera) without re-marking it.
     surface_height_m: float = 0.0
-    # Camera touch-off wizard state: whether the arm is currently released (torque off, hand
-    # guidable) and where the gripper tip was for each of CAMERA_TOUCH_POINTS that has been
-    # touched. All four are needed - four correspondences is already the minimum the pose fit
-    # can work from, so there is none to give away.
+    # Whether the arm is released (torque off), and where the jaw tips were for each of
+    # CAMERA_TOUCH_POINTS touched so far. All four are needed: the fit has no spare.
     arm_released: bool = False
     touched: dict[str, tuple[float, float, float]] = field(default_factory=dict)
 
@@ -257,9 +255,7 @@ class Draft:
             "reach": {"unreachable": list(self.unreachable), "orientation": self.orientation}
             if self.board_origin_xyz is not None else None,
             "park": None if self.park_joints is None else {"joints": [round(v, 4) for v in self.park_joints]},
-            # A touch can be taken before the board is marked: it is an FK reading against a
-            # point name. The pixel it pairs with is picked up from the board step at fit time,
-            # which is why relabelling the corners relabels these too.
+            # Independent of the board step until fit time, when each name picks up its pixel.
             "touch": {
                 "arm_released": self.arm_released,
                 "points": [

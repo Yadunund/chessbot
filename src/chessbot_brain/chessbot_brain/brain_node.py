@@ -41,6 +41,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
+from visualization_msgs.msg import Marker, MarkerArray
 
 from chessbot_brain import skills
 from chessbot_brain.board import Board, piece_colour, square_name
@@ -89,6 +90,27 @@ JOG_BOX = ((0.08, 0.30), (-0.18, 0.18), (0.04, 0.30))
 MAX_JOINT_JOG = 0.3
 
 
+PIECE_NAMES = {"p": "pawn", "n": "knight", "b": "bishop", "r": "rook", "q": "queen", "k": "king"}
+
+
+def describe_move(board: Board, effects) -> str:
+    """A move in words, read from the position before it is applied."""
+    source, destination = effects.uci[:2], effects.uci[2:4]
+    name = PIECE_NAMES.get((board.piece_at(source) or "").lower(), "piece")
+    if effects.rook_from is not None:
+        side = "kingside" if effects.rook_from[0] == "h" else "queenside"
+        return f"{side} castling, king {source} to {destination}, rook {effects.rook_from} to {effects.rook_to}"
+    text = f"{name} {source} to {destination}"
+    if effects.captured is not None:
+        taken = PIECE_NAMES.get(effects.captured.lower(), "piece")
+        text += f", taking the {taken} on {effects.capture_square}"
+        if effects.capture_square != destination:
+            text += " en passant"
+    if effects.promotion is not None:
+        text += f", promoting to {PIECE_NAMES.get(effects.promotion.lower(), 'piece')}"
+    return text
+
+
 class Busy(RuntimeError):
     pass
 
@@ -126,10 +148,15 @@ class BrainNode(Node):
         default_stockfish = os.path.join(os.environ.get("PIXI_PROJECT_ROOT", ""), "generated", "bin", "stockfish")
         stockfish_path = self.declare_parameter("stockfish_path", default_stockfish).value
         self.engine_movetime_ms = int(self.declare_parameter("engine_movetime_ms", 800).value)
+        # False reports the reply and leaves the arm alone, for checking perception and the
+        # engine without motion in the loop.
+        self.play_moves = bool(self.declare_parameter("play_moves", True).value)
 
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
         self.state_pub = self.create_publisher(GameState, "/chessbot/game_state", latched)
         self.thought_pub = self.create_publisher(Thought, "/chessbot/thoughts", 50)
+        self.board_marker_pub = self.create_publisher(MarkerArray, "/chessbot/board_markers", latched)
+        self.create_timer(1.0, self.publish_board_markers)
         # Kept for the UI's 3D view, which draws the robot from its URDF.
         self.robot_description = ""
         self.create_subscription(String, "/robot_description", self._on_robot_description, latched)
@@ -205,6 +232,48 @@ class BrainNode(Node):
             self.phase = phase
         self.publish_state()
 
+    def publish_board_markers(self):
+        """The calibrated board as markers, for RViz."""
+        geometry = self.geometry_if_calibrated()
+        if geometry is None:
+            return
+        side = geometry.square_size_m * 8.0
+        centre = geometry.board_to_robot(side / 2.0, side / 2.0)
+        half_yaw = geometry.yaw_rad / 2.0
+        markers = MarkerArray()
+
+        surface = Marker()
+        surface.header.frame_id = geometry.frame_id
+        surface.ns, surface.id, surface.type, surface.action = "board", 0, Marker.CUBE, Marker.ADD
+        surface.pose.position.x, surface.pose.position.y, surface.pose.position.z = centre
+        surface.pose.orientation.z, surface.pose.orientation.w = math.sin(half_yaw), math.cos(half_yaw)
+        surface.scale.x, surface.scale.y, surface.scale.z = side, side, 0.002
+        surface.color.r, surface.color.g, surface.color.b, surface.color.a = 0.85, 0.80, 0.72, 0.85
+        markers.markers.append(surface)
+
+        label = Marker()
+        label.header.frame_id = geometry.frame_id
+        label.ns, label.id, label.type, label.action = "board", 1, Marker.TEXT_VIEW_FACING, Marker.ADD
+        label.pose.position.x, label.pose.position.y = centre[0], centre[1]
+        label.pose.position.z = centre[2] + 0.05
+        label.pose.orientation.w = 1.0
+        label.scale.z = 0.015
+        label.color.r = label.color.g = label.color.b = label.color.a = 1.0
+        label.text = (f"{side * 1000:.0f} mm board, {geometry.square_size_m * 1000:.1f} mm squares, "
+                      f"{math.degrees(geometry.yaw_rad):.1f} deg")
+        markers.markers.append(label)
+
+        origin = Marker()
+        origin.header.frame_id = geometry.frame_id
+        origin.ns, origin.id, origin.type, origin.action = "board", 2, Marker.SPHERE, Marker.ADD
+        origin.pose.position.x, origin.pose.position.y, origin.pose.position.z = geometry.origin_xyz
+        origin.pose.orientation.w = 1.0
+        origin.scale.x = origin.scale.y = origin.scale.z = 0.008
+        origin.color.r, origin.color.a = 1.0, 1.0
+        markers.markers.append(origin)
+
+        self.board_marker_pub.publish(markers)
+
     def publish_state(self):
         with self._lock:
             msg = GameState()
@@ -239,6 +308,7 @@ class BrainNode(Node):
                 "fen": self.board.fen(),
                 "turn": self.side_to_move(),
                 "robot_side": self.robot_side,
+                "play_moves": self.play_moves,
                 "robot_name": self.robot_name,
                 "moves": list(self.moves),
                 # Pieces the robot has captured, where it put them (board frame, in squares).
@@ -299,9 +369,8 @@ class BrainNode(Node):
     def run_now(self, name: str, fn, *args):
         """Run a short job inline and return its result, under `submit`'s one-at-a-time lock.
 
-        The calibration wizard needs the new state in the response, so those steps cannot go
-        on the worker thread. They still have to be exclusive with whatever the worker is
-        doing: releasing the arm while a trajectory is running cuts torque under a moving arm.
+        For wizard steps that must answer with the state they produced, and must not run
+        while the worker is moving the arm.
         """
         if not self._busy.acquire(blocking=False):
             raise Busy(f"busy with {self.current_job}")
@@ -369,9 +438,10 @@ class BrainNode(Node):
             return
 
         with self._lock:
+            described = describe_move(self.board, self.board.effects(move))
             self.board.apply(move)
             self.moves.append(move)
-        self.think(Thought.DECIDE, f"Your move: {move}.")
+        self.think(Thought.DECIDE, f"Your move: {move} - {described}.")
         if self._game_over():
             return
         self._robot_turn()
@@ -540,10 +610,21 @@ class BrainNode(Node):
                 return
             self.think(Thought.DECIDE, f"I'll play {reply} (placeholder engine, no rules checked).")
 
-        self.set_phase(GameState.PHASE_MOVING)
-        geometry = self.geometry()
+        geometry = self.geometry_if_calibrated() if not self.play_moves else self.geometry()
         effects = self.board.effects(reply)
+        if not self.play_moves:
+            self.think(Thought.PLAN, f"I would play {describe_move(self.board, effects)}, but play_moves is off.")
+            with self._lock:
+                self.board.apply(reply)
+                self.moves.append(reply)
+            self._switch_clock("white" if self.robot_side == "black" else "black")
+            if not self._game_over():
+                self.set_phase(GameState.PHASE_HUMAN_TURN)
+            return
+
+        self.set_phase(GameState.PHASE_MOVING)
         self.think(Thought.PLAN, f"Plan for {reply}: pick, place{', capture first' if effects.captured else ''}.")
+
         skills.execute_chess_move(
             self.caps, geometry, effects, self.graveyard, lambda text: self.think(Thought.ACT, text),
             self.believed_pieces(geometry),
@@ -600,11 +681,9 @@ class BrainNode(Node):
     def job_move_tool(self, xyz, yaw_deg: float, speed_pct: float | None = None):
         """Move to an absolute tool target.
 
-        `speed_pct` is only given by the jog UI's press-and-hold loop: it switches to the
-        single-waypoint jog trajectory (see `Capabilities.jog_trajectory`) so repeated calls
-        blend continuously instead of resetting to a stop each time. A deliberate one-off move
-        (park-pose jogging, the dev "move tool" control) leaves it unset and keeps the eased,
-        come-to-a-stop profile.
+        `speed_pct` is only given by the jog UI's press-and-hold loop: the step is published
+        rather than sent as a goal, so the next tick supersedes it mid-motion. A one-off move
+        leaves it unset and waits for the arm to arrive.
         """
         target = tuple(min(max(v, lo), hi) for v, (lo, hi) in zip(xyz, JOG_BOX))
         if tuple(xyz) != target:
@@ -613,9 +692,9 @@ class BrainNode(Node):
         solution = self.caps.solve_ik(target, tool_down(math.radians(yaw_deg)))
         if speed_pct is None:
             self.caps.execute(self.caps.joint_move_trajectory(solution))
+            self.think(Thought.ACT, f"Tool at {tuple(round(v, 3) for v in target)}.")
         else:
-            self.caps.execute(self.caps.jog_trajectory(solution, speed_pct / 100.0))
-        self.think(Thought.ACT, f"Tool at {tuple(round(v, 3) for v in target)}.")
+            self.caps.stream(self.caps.jog_trajectory(solution, speed_pct / 100.0))
 
     def job_jog(self, axis: str, delta_m: float, speed_pct: float = 100.0):
         (x, y, z), yaw = self.caps.tool_pose()
@@ -638,8 +717,7 @@ class BrainNode(Node):
         step = max(-MAX_JOINT_JOG, min(MAX_JOINT_JOG, float(delta_rad)))
         target = self.caps.joint_positions()
         target[names.index(joint)] += step
-        self.caps.execute(self.caps.jog_trajectory(target, speed_pct / 100.0))
-        self.think(Thought.ACT, f"{joint} to {target[names.index(joint)]:.3f} rad.")
+        self.caps.stream(self.caps.jog_trajectory(target, speed_pct / 100.0))
 
     def job_gripper(self, position: float):
         self.caps.gripper(position)
@@ -665,8 +743,10 @@ class BrainNode(Node):
     def calibration_touch(self) -> dict:
         """Record the next unrecorded touch point at the arm's current (hand-guided) position.
 
+        What is recorded is where the closed jaw tips are, not the grasp point between them.
+
         Nothing is recorded on a whim - the arm has to actually be released first, and this is
-        only ever called from an explicit "confirm" press once the person has the tool tip on
+        only ever called from an explicit "confirm" press once the person has the jaw tips on
         the point, so a person watching the live pose readout is always the one deciding when a
         touch counts.
         """
@@ -675,7 +755,7 @@ class BrainNode(Node):
         name = next((n for n in calib.CAMERA_TOUCH_POINTS if n not in self.draft.touched), None)
         if name is None:
             raise CapabilityError("every point is already touched")
-        position, _yaw = self.caps.tool_pose()
+        position = self.caps.touch_point()
         self.draft.touched[name] = position
         self.think(Thought.PERCEIVE, f"Touched {name} at {tuple(round(v, 3) for v in position)}.")
         return self.draft.steps()
@@ -735,8 +815,7 @@ class BrainNode(Node):
         position, rpy = self.caps.camera_pose()
         centre = self.caps.camera_centre()
         frame = self.caps.camera_raw()
-        # The frame is only needed when camera_info cannot give the principal point, so it is
-        # the pair that has to be usable, not either one on its own.
+        # The frame is only needed when camera_info has no principal point to give.
         if frame is None and not (centre and centre[0]):
             raise CapabilityError("no camera frames or camera_info yet")
         centre_px = (centre[0], centre[1]) if centre and centre[0] else (frame.width / 2, frame.height / 2)
@@ -746,11 +825,9 @@ class BrainNode(Node):
     def calibration_board(self, corners, surface_height_m: float = 0.0) -> dict:
         """The board pose implied by four corners marked in the camera image (a1, h1, h8, a8).
 
-        These clicks double as the 2D half of the camera step's correspondences, so they are
-        kept and that step doesn't ask again. Touches are paired with them by corner name, and
-        a fresh set of clicks can put those names on different physical corners, so touches
-        already taken are dropped rather than silently paired with the wrong pixel. Relabelling
-        the same four clicks is `calibration_rotate_board`, which keeps them.
+        The clicks are kept as the 2D half of the camera step's correspondences. Touches pair
+        with them by corner name, so a fresh set of clicks drops them rather than pairing them
+        with the wrong pixel; `calibration_rotate_board` relabels both together instead.
         """
         corners = list(corners)
         if self.draft.touched and corners != self.draft.board_corners_px:
@@ -764,9 +841,7 @@ class BrainNode(Node):
     def calibration_rotate_board(self) -> dict:
         """Relabel the marked corners half a turn: what was marked h8 becomes a1.
 
-        The clicks and the touches are relabelled together. They are paired by corner name, so
-        moving the labels on one side alone would pair every touched point with the wrong pixel
-        and fit a camera that is confidently wrong.
+        Clicks and touches move together, since the fit pairs them by corner name.
         """
         if self.draft.board_corners_px is None:
             raise CapabilityError("mark the board's corners first")
@@ -1072,8 +1147,6 @@ def build_app(node: BrainNode) -> FastAPI:
         stored = node.caps.kv_get("chessbot/kv/calibration")
         return {"stored": stored, "draft": node.draft.steps()}
 
-    # The release cycle takes the arm's torque away and the touches read its pose, so these
-    # run under the job lock rather than beside whatever the worker thread is doing.
     @app.post("/api/calibration/camera")
     def calibration_camera():
         return run_now("calibrate_camera", node.calibration_camera_fit)
