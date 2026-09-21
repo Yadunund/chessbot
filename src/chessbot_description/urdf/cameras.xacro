@@ -19,12 +19,19 @@
       wrist_xyz:='0.0 0.065 -0.03'
       wrist_rpy:='2.618 0.0 0.0'
       include_inertia:='false'
+      overhead_from_calibration:='false'
     ">
 
     <!-- Overhead camera: on the mast, looking straight down at the board centre.
          Default pose is 51 cm above the table, over the centre of a 21 cm board
          whose near edge sits 9 cm from the pan axis. -->
-    <link name="overhead_camera_link">
+    <!-- Where the mast is said to put the camera. With overhead_from_calibration, this is
+         only the mount: the calibration node publishes overhead_camera_link against it from
+         what was measured, so a camera that does not hang where this says still lands right. -->
+    <xacro:property name="overhead_child"
+                    value="${'overhead_camera_mount' if overhead_from_calibration else 'overhead_camera_link'}" />
+
+    <link name="${overhead_child}">
       <xacro:if value="${include_inertia}">
         <inertial>
           <mass value="0.001" />
@@ -35,7 +42,7 @@
 
     <joint name="overhead_camera_joint" type="fixed">
       <parent link="${prefix}base_link" />
-      <child link="overhead_camera_link" />
+      <child link="${overhead_child}" />
       <origin xyz="${overhead_xyz}" rpy="${overhead_rpy}" />
     </joint>
 

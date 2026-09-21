@@ -15,17 +15,64 @@ exercised end to end.
 
 from __future__ import annotations
 
+import math
 import time
 
+import numpy as np
 import rclpy
 import zenoh
 from chessbot_interfaces.action import Calibrate
 from chessbot_interfaces.srv import SetCalibration
+from geometry_msgs.msg import TransformStamped
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformException, TransformListener
+from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 from chessbot_calibration import profile as prof
+
+
+def _matrix(position, rpy) -> np.ndarray:
+    roll, pitch, yaw = rpy
+    cr, sr, cp, sp, cy, sy = (math.cos(roll), math.sin(roll), math.cos(pitch),
+                              math.sin(pitch), math.cos(yaw), math.sin(yaw))
+    transform = np.eye(4)
+    transform[:3, :3] = [
+        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+        [-sp, cp * sr, cp * cr],
+    ]
+    transform[:3, 3] = position
+    return transform
+
+
+def _quaternion_matrix(x, y, z, w) -> np.ndarray:
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ])
+
+
+def _quaternion(rotation: np.ndarray):
+    trace = rotation[0, 0] + rotation[1, 1] + rotation[2, 2]
+    if trace > 0.0:
+        scale = math.sqrt(trace + 1.0) * 2.0
+        w = 0.25 * scale
+        x = (rotation[2, 1] - rotation[1, 2]) / scale
+        y = (rotation[0, 2] - rotation[2, 0]) / scale
+        z = (rotation[1, 0] - rotation[0, 1]) / scale
+    else:
+        i = int(np.argmax([rotation[0, 0], rotation[1, 1], rotation[2, 2]]))
+        j, k = (i + 1) % 3, (i + 2) % 3
+        scale = math.sqrt(1.0 + rotation[i, i] - rotation[j, j] - rotation[k, k]) * 2.0
+        w = (rotation[k, j] - rotation[j, k]) / scale
+        axis = [0.0, 0.0, 0.0]
+        axis[i], axis[j], axis[k] = 0.25 * scale, (rotation[j, i] + rotation[i, j]) / scale, (rotation[k, i] + rotation[i, k]) / scale
+        x, y, z = axis
+    return float(x), float(y), float(z), float(w)
 
 
 class CalibrationNode(Node):
@@ -51,7 +98,50 @@ class CalibrationNode(Node):
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
         )
         self.create_service(SetCalibration, "/calibration/set", self._on_set)
+
+        # The description says where the mast puts the camera; this says where it measured out
+        # to be. Published against the mount so robot_state_publisher keeps owning the arm.
+        self.camera_frame = self.declare_parameter("camera_frame", "overhead_camera_link").value
+        self.camera_mount_frame = self.declare_parameter("camera_mount_frame", "overhead_camera_mount").value
+        self.base_frame = self.declare_parameter("base_frame", "base_link").value
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.tf_static = StaticTransformBroadcaster(self)
+        self._camera_frame_timer = self.create_timer(1.0, self._publish_camera_frame)
         self.get_logger().info("Serving /calibration/calibrate and /calibration/set")
+
+    def _publish_camera_frame(self):
+        """Put the measured camera pose into TF, as a correction on the described mount.
+
+        Retried until the mount is in TF, then once per stored calibration. Without this the
+        measurement is only a record, and perception keeps using the described pose.
+        """
+        try:
+            mount = self.tf_buffer.lookup_transform(self.base_frame, self.camera_mount_frame, Time()).transform
+        except TransformException:
+            return
+        t = mount.translation
+        q = mount.rotation
+        base_mount = np.eye(4)
+        base_mount[:3, :3] = _quaternion_matrix(q.x, q.y, q.z, q.w)
+        base_mount[:3, 3] = [t.x, t.y, t.z]
+        base_camera = _matrix(self.profile.camera.position_xyz, self.profile.camera.rpy)
+        correction = np.linalg.inv(base_mount) @ base_camera
+
+        message = TransformStamped()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = self.camera_mount_frame
+        message.child_frame_id = self.camera_frame
+        message.transform.translation.x, message.transform.translation.y, message.transform.translation.z = (
+            float(v) for v in correction[:3, 3])
+        (message.transform.rotation.x, message.transform.rotation.y,
+         message.transform.rotation.z, message.transform.rotation.w) = _quaternion(correction[:3, :3])
+        self.tf_static.sendTransform(message)
+        if self._camera_frame_timer is not None:
+            self._camera_frame_timer.cancel()
+            self._camera_frame_timer = None
+        self.get_logger().info(
+            f"Published {self.camera_mount_frame} -> {self.camera_frame} from the {self.profile.source} calibration")
 
     def _open_session(self, timeout_s: float = 30.0):
         """Wait for the router rather than dying if this node starts before it.
@@ -112,6 +202,7 @@ class CalibrationNode(Node):
         self.profile = prof.CalibrationProfile(board=board, camera=camera, park_joints=park, source="measured")
         prof.save(self.profile_path, self.profile)
         self._prime()
+        self._publish_camera_frame()
         self.get_logger().info(f"Stored a measured calibration in {self.profile_path}")
         response.ok = True
         response.message = "stored"

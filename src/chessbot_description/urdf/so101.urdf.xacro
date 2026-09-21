@@ -34,7 +34,8 @@
   <xacro:chessbot_cameras prefix="$(arg prefix)"
                           overhead_xyz="$(arg overhead_xyz)"
                           overhead_rpy="$(arg overhead_rpy)"
-                          include_inertia="true" />
+                          include_inertia="true"
+                          overhead_from_calibration="${'$(arg hardware)' != 'gazebo'}" />
 
   <xacro:chessbot_ros2_control prefix="$(arg prefix)" hardware="$(arg hardware)" usb_port="$(arg usb_port)"
                                joint_config_file="$(arg joint_config_file)" />
