@@ -422,6 +422,14 @@ function newPhoto() {
   $("setup-frame").src = `/api/camera/frame.png?scale=2&t=${Date.now()}`;
 }
 
+function renderCameraResult(draft) {
+  if (!draft.camera) return;
+  const [x, y, z] = draft.camera.position_xyz;
+  $("camera-result").textContent =
+    `Camera at ${(x * 100).toFixed(0)}, ${(y * 100).toFixed(0)}, ${(z * 100).toFixed(0)} cm. ` +
+    "Four corners on one plane fit any number of camera poses equally well, so treat this as approximate.";
+}
+
 function renderBoardResult(data) {
   const board = data.board || {};
   const reach = data.reach || {};
@@ -458,6 +466,7 @@ async function sendCorners() {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) { $("camera-result").textContent = data.detail || "Could not use those corners."; return; }
+  renderCameraResult(data);
   renderBoardResult(data);
   renderTouch(data.touch);
 }
@@ -558,12 +567,7 @@ async function refreshSetup() {
   if (!res.ok) return;
   const { draft } = await res.json();
   // Not while corners are being clicked: that message is the running instruction.
-  if (draft.camera && (corners.length === 0 || corners.length === 4)) {
-    const [x, y, z] = draft.camera.position_xyz;
-    $("camera-result").textContent =
-      `Camera at ${(x * 100).toFixed(0)}, ${(y * 100).toFixed(0)}, ${(z * 100).toFixed(0)} cm. ` +
-      "Four corners on one plane fit any number of camera poses equally well, so treat this as approximate.";
-  }
+  if (corners.length === 0 || corners.length === 4) renderCameraResult(draft);
   if (draft.board) renderBoardResult(draft);
   if (draft.park) $("park-result").textContent = `Saved: ${draft.park.joints.map((v) => v.toFixed(2)).join(", ")}`;
   renderTouch(draft.touch);

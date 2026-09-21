@@ -843,14 +843,8 @@ class BrainNode(Node):
         """
         if self.draft.board_corners_px is None:
             raise CapabilityError("mark the board's corners first")
-        touched = [(name, self.draft.touched[name]) for name in calib.CAMERA_TOUCH_POINTS
-                   if name in self.draft.touched]
-        if len(touched) < len(calib.CAMERA_TOUCH_POINTS):
-            raise CapabilityError(
-                f"only {len(touched)} of {len(calib.CAMERA_TOUCH_POINTS)} points touched; "
-                "the fit needs all of them")
-        points = [pos for _name, pos in touched]
-        pixels = [self.draft.board_corners_px[calib.CAMERA_TOUCH_POINTS.index(name)] for name, _pos in touched]
+        points, source = self.board_corner_points()
+        pixels = list(self.draft.board_corners_px)
         centre = self.caps.camera_centre()
         frame = self.caps.camera_raw()
         if frame is None:
@@ -860,8 +854,31 @@ class BrainNode(Node):
         model = calib.fit_camera(points, pixels, centre_px, focal_px)
         self.draft.camera = model
         self.think(Thought.VERIFY, f"Camera at {tuple(round(v, 3) for v in model.position)}, "
-                                   f"fit {model.error_mean_px:.0f} px mean over {len(touched)} points.")
+                                   f"fitted against {source}.")
         return self.draft.steps()
+
+    def board_corner_points(self):
+        """The four board corners in the robot frame, and where that knowledge came from.
+
+        Touches if this session took them. Otherwise the board already measured and stored:
+        moving the camera does not move the board, so its corners are still where the arm last
+        found them and there is nothing to touch again.
+        """
+        touched = [self.draft.touched[name] for name in calib.CAMERA_TOUCH_POINTS
+                   if name in self.draft.touched]
+        if len(touched) == len(calib.CAMERA_TOUCH_POINTS):
+            return touched, "the corners you touched"
+        if self.draft.board_origin_xyz is not None and self.draft.square_size_m:
+            return (calib.board_corners_xyz(self.draft.board_origin_xyz, self.draft.board_yaw_rad or 0.0,
+                                            self.draft.square_size_m),
+                    "the board measured a moment ago")
+        geometry = self.geometry_if_calibrated()
+        if geometry is not None:
+            return (calib.board_corners_xyz(geometry.origin_xyz, geometry.yaw_rad, geometry.square_size_m),
+                    "the stored board")
+        raise CapabilityError(
+            "nothing to measure the camera against yet: touch the board's four corners, or "
+            "save a calibration that has them")
 
     def calibration_board(self, corners) -> dict:
         """Four corners marked in the camera image (a1, h1, h8, a8): where the camera is.
@@ -871,10 +888,7 @@ class BrainNode(Node):
         to know which pixels are which square.
         """
         self.draft.board_corners_px = list(corners)
-        if len(self.draft.touched) == len(calib.CAMERA_TOUCH_POINTS):
-            return self.calibration_camera_fit()
-        self.think(Thought.EXPLAIN, "Corners marked. Touch them with the gripper to place the camera.")
-        return self.draft.steps()
+        return self.calibration_camera_fit()
 
     def calibration_set_square_size(self, millimetres: float) -> dict:
         """A known square size, checked against what the touches measure."""

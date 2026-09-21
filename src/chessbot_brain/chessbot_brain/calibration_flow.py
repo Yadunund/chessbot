@@ -168,6 +168,15 @@ def board_from_points(points) -> BoardFromCorners | None:
     )
 
 
+def board_corners_xyz(origin_xyz, yaw_rad: float, square_size_m: float) -> list[tuple[float, float, float]]:
+    """The four outer corners of a known board, in a1, h1, h8, a8 order."""
+    cos_yaw, sin_yaw = math.cos(yaw_rad), math.sin(yaw_rad)
+    side = square_size_m * 8
+    return [(origin_xyz[0] + cos_yaw * bx - sin_yaw * by,
+             origin_xyz[1] + sin_yaw * bx + cos_yaw * by,
+             origin_xyz[2]) for bx, by in ((0.0, 0.0), (side, 0.0), (side, side), (0.0, side))]
+
+
 def board_from_touches(touched: dict) -> BoardFromCorners | None:
     """Board pose measured by touching its four outer corners with the gripper.
 
