@@ -36,12 +36,15 @@ arm_controller:
     constraints:
       stopped_velocity_tolerance: 0.05
       goal_time: 5.0
-      # About three degrees: more than gravity sag, less than half a square at the board.
-      shoulder_pan_joint: {goal: 0.05}
-      shoulder_lift_joint: {goal: 0.05}
-      elbow_flex_joint: {goal: 0.05}
-      wrist_flex_joint: {goal: 0.05}
-      wrist_roll_joint: {goal: 0.05}
+      # Measured on this arm with the controller's own error topic, holding a pose extended
+      # over the board: elbow 0.073, pan 0.067, wrist_roll 0.042, lift 0.023, wrist_flex 0.016.
+      # These servos hold a few degrees short of a command under load and stay there, so a
+      # tolerance under that aborts every goal after the trajectory has already finished.
+      shoulder_pan_joint: {goal: 0.12}
+      shoulder_lift_joint: {goal: 0.12}
+      elbow_flex_joint: {goal: 0.12}
+      wrist_flex_joint: {goal: 0.12}
+      wrist_roll_joint: {goal: 0.12}
 
 gripper_controller:
   ros__parameters:

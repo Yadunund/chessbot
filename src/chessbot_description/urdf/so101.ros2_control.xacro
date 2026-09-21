@@ -42,7 +42,9 @@
 
       <xacro:arm_joint name="${prefix}shoulder_pan_joint" id="1" p_coefficient="8" />
       <xacro:arm_joint name="${prefix}shoulder_lift_joint" id="2" />
-      <xacro:arm_joint name="${prefix}elbow_flex_joint" id="3" />
+      <!-- Holds the most gravity torque with the arm extended over the board; at p=16 it sat
+           0.09 rad short of a held pose, past the controller's arrival tolerance. -->
+      <xacro:arm_joint name="${prefix}elbow_flex_joint" id="3" p_coefficient="32" />
       <xacro:arm_joint name="${prefix}wrist_flex_joint" id="4" />
       <xacro:arm_joint name="${prefix}wrist_roll_joint" id="5" />
       <xacro:arm_joint name="${prefix}gripper_joint" id="6" />
