@@ -14,6 +14,7 @@ import json
 import math
 import struct
 import threading
+import time
 import zlib
 from dataclasses import dataclass
 
@@ -21,7 +22,9 @@ import zenoh
 from chessbot_interfaces.action import Calibrate
 from chessbot_interfaces.srv import GetBoardState, Reason, SetCalibration
 from control_msgs.action import FollowJointTrajectory, ParallelGripperCommand
+from controller_manager_msgs.srv import SetHardwareComponentState, SwitchController
 from geometry_msgs.msg import Pose, PoseStamped
+from lifecycle_msgs.msg import State as LifecycleState
 from moveit_msgs.msg import MoveItErrorCodes
 from moveit_msgs.srv import GetCartesianPath, GetPositionIK
 from rclpy.action import ActionClient
@@ -72,6 +75,30 @@ def encode_png(data: bytes, width: int, height: int, step: int, bgr: bool, scale
             + chunk(b"IDAT", zlib.compress(b"".join(rows), 6)) + chunk(b"IEND", b""))
 
 
+def open_zenoh(config, endpoint: str, logger=None, timeout_s: float = 30.0):
+    """Open a Zenoh session, waiting for the router instead of dying if it is not up yet.
+
+    Launch order should not decide whether the application comes up. A node that started a
+    moment before the router used to exit with a bare traceback, leaving a stack that looked
+    half alive - the nodes that do not use the store kept running, and the UI simply never
+    appeared.
+    """
+    deadline = time.monotonic() + timeout_s
+    warned = False
+    while True:
+        try:
+            return zenoh.open(config)
+        except Exception as exc:  # noqa: BLE001 - any failure to reach the router
+            if time.monotonic() >= deadline:
+                raise CapabilityError(
+                    f"no Zenoh router at {endpoint} after {timeout_s:.0f}s; start one with `pixi run router`"
+                ) from exc
+            if logger is not None and not warned:
+                logger.warning(f"Waiting for the Zenoh router at {endpoint}...")
+                warned = True
+            time.sleep(1.0)
+
+
 def _wait(future, timeout_s: float, what: str):
     done = threading.Event()
     future.add_done_callback(lambda _f: done.set())
@@ -100,6 +127,15 @@ class ArmConfig:
     base_frame: str = "base_link"
     # The jaws' opening direction in tip_frame (matches the motion node's opening_axis).
     opening_axis: tuple[float, float, float] = (-1.0, 0.0, 0.0)
+    # ros2_control hardware component name (the <ros2_control name="..."> in the URDF), for
+    # releasing/reactivating the arm - e.g. to hand-guide it during camera calibration.
+    hardware_component: str = "SO_ARM101"
+    # ros2_control controller name commanding the arm, for the same release/reactivate cycle.
+    controller: str = "arm_controller"
+    # The gripper's controller. Its joint is in the same hardware component, so dropping that
+    # component takes the gripper's command interface with it: both controllers are switched
+    # together or the jaws come back dead.
+    gripper_controller: str = "gripper_controller"
 
 
 class Capabilities:
@@ -120,11 +156,14 @@ class Capabilities:
         self.gripper_action = ActionClient(node, ParallelGripperCommand, "/gripper_controller/gripper_cmd")
         self.calibrate_action = ActionClient(node, Calibrate, "/calibration/calibrate")
         self.set_calibration_client = node.create_client(SetCalibration, "/calibration/set")
+        self.switch_controller_client = node.create_client(SwitchController, "/controller_manager/switch_controller")
+        self.set_hw_state_client = node.create_client(
+            SetHardwareComponentState, "/controller_manager/set_hardware_component_state")
 
         config = zenoh.Config()
         config.insert_json5("mode", '"client"')
         config.insert_json5("connect/endpoints", f'["{zenoh_endpoint}"]')
-        self.zenoh = zenoh.open(config)
+        self.zenoh = open_zenoh(config, zenoh_endpoint, node.get_logger())
 
     def close(self):
         self.zenoh.close()
@@ -213,7 +252,7 @@ class Capabilities:
         response = _wait(self.reasoner.call_async(request), timeout_s, "reasoning")
         return response if response.result == Reason.Response.RESULT_OK else None
 
-    def camera_raw(self, topic: str = "/overhead_camera/image_raw", timeout_s: float = 3.0) -> Image | None:
+    def camera_raw(self, topic: str = "/overhead_camera/image_rect", timeout_s: float = 3.0) -> Image | None:
         """One camera frame as it arrived, for measurements that work in pixels."""
         arrived = threading.Event()
         frames: list[Image] = []
@@ -229,6 +268,24 @@ class Capabilities:
         finally:
             self.node.destroy_subscription(subscription)
         return frames[0] if frames else None
+
+    def camera_pose(self, frame: str = "overhead_camera_link"):
+        """The camera's pose in the base frame, from the robot description via TF.
+
+        Where the camera is mounted is already part of the description, so this is what the
+        board can be measured against without any calibration of its own. Measuring the
+        camera from the gripper refines it; it is not a prerequisite.
+        """
+        try:
+            t = self.tf_buffer.lookup_transform(self.arm.base_frame, frame, Time()).transform
+        except TransformException as exc:
+            raise CapabilityError(f"no transform to {frame}: {exc}") from exc
+        x, y, z, w = t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w
+        # Roll, pitch, yaw from the quaternion, to match how the camera model is stored.
+        roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+        pitch = math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x))))
+        yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+        return (t.translation.x, t.translation.y, t.translation.z), (roll, pitch, yaw)
 
     def camera_centre(self, topic: str = "/overhead_camera/camera_info", timeout_s: float = 3.0):
         """(cx, cy, fx) from camera_info, or None. Used as the starting point for a fit."""
@@ -248,9 +305,14 @@ class Capabilities:
         if not infos:
             return None
         info = infos[0]
+        # P describes the rectified image, K the raw one. The topic these measurements are
+        # taken from is rectified, so P is the matrix that matches the pixels being measured;
+        # on a lens with no distortion the two are equal anyway.
+        if float(info.p[0]) > 0.0:
+            return (float(info.p[2]), float(info.p[6]), float(info.p[0]))
         return (float(info.k[2]), float(info.k[5]), float(info.k[0]))
 
-    def camera_frame(self, topic: str = "/overhead_camera/image_raw", scale: int = 2, timeout_s: float = 3.0) -> CompressedImage | None:
+    def camera_frame(self, topic: str = "/overhead_camera/image_rect", scale: int = 2, timeout_s: float = 3.0) -> CompressedImage | None:
         """One camera frame as PNG (downscaled), for questions to the reasoning model.
 
         Subscribed on demand rather than through `wait_for_message`, whose own wait set
@@ -334,7 +396,77 @@ class Capabilities:
         trajectory.points = [start, end]
         return trajectory
 
+    def jog_trajectory(self, target: list[float], speed_fraction: float = 1.0) -> JointTrajectory:
+        """A single-waypoint trajectory, for jogging and hand-guide-assist motion.
+
+        `joint_move_trajectory` manufactures a start point at the current position with zero
+        velocity, so chaining calls resets velocity to zero every time - fine for one
+        deliberate move, but it makes repeated small steps (a held jog button, touch-off
+        nudging) feel stepped rather than continuous. Publishing only the target lets the
+        controller spline from whatever it is actually doing right now - including mid-motion,
+        with whatever velocity that carries - instead of forcing a stop in between.
+        """
+        current = self.joint_positions()
+        travel = max(abs(a - b) for a, b in zip(current, target))
+        speed = max(0.05, min(1.0, speed_fraction)) * self.arm.joint_speed
+        duration = max(0.05, travel / speed)
+        trajectory = JointTrajectory()
+        trajectory.joint_names = list(self.arm.joints)
+        trajectory.points = [
+            JointTrajectoryPoint(positions=list(target), time_from_start=Duration(seconds=duration).to_msg())
+        ]
+        return trajectory
+
     # --- control -----------------------------------------------------------------------
+
+    def release_arm(self, timeout_s: float = 10.0) -> None:
+        """Stop the arm controller and drop its hardware component to inactive.
+
+        The hardware component's on_deactivate is what actually cuts torque (checked against
+        the real driver, not assumed here); state interfaces stay live regardless of lifecycle
+        state, so tool_pose keeps tracking wherever the arm is hand-guided to.
+
+        Both controllers go down, not just the arm's: the gripper's joint belongs to the same
+        component, so its command interface disappears with it either way. Taking it down
+        deliberately is what makes `reactivate_arm` able to bring it back.
+        """
+        self._switch_controller(
+            deactivate=[self.arm.controller, self.arm.gripper_controller], timeout_s=timeout_s)
+        self._set_hardware_state(LifecycleState.PRIMARY_STATE_INACTIVE, timeout_s)
+
+    def reactivate_arm(self, timeout_s: float = 10.0) -> None:
+        """Undo `release_arm`: torque back on, then hand control back to the controller.
+
+        Order matters - the hardware component has to be active (and its command seeded to
+        the arm's current position, which it does on its own) before the controller is handed
+        anything to hold, or there is nothing yet for it to hold onto.
+        """
+        self._set_hardware_state(LifecycleState.PRIMARY_STATE_ACTIVE, timeout_s)
+        self._switch_controller(
+            activate=[self.arm.controller, self.arm.gripper_controller], timeout_s=timeout_s)
+
+    def _switch_controller(self, activate: list[str] = (), deactivate: list[str] = (), timeout_s: float = 10.0):
+        if not self.switch_controller_client.wait_for_service(timeout_sec=timeout_s):
+            raise CapabilityError("controller_manager is not available")
+        request = SwitchController.Request(
+            activate_controllers=list(activate),
+            deactivate_controllers=list(deactivate),
+            strictness=SwitchController.Request.STRICT,
+            activate_asap=True,
+            timeout=Duration(seconds=timeout_s).to_msg(),
+        )
+        response = _wait(self.switch_controller_client.call_async(request), timeout_s, "switch_controller")
+        if not response.ok:
+            raise CapabilityError(f"switch_controller failed (activate={list(activate)}, deactivate={list(deactivate)})")
+
+    def _set_hardware_state(self, target_state_id: int, timeout_s: float = 10.0):
+        if not self.set_hw_state_client.wait_for_service(timeout_sec=timeout_s):
+            raise CapabilityError("controller_manager is not available")
+        request = SetHardwareComponentState.Request(
+            name=self.arm.hardware_component, target_state=LifecycleState(id=target_state_id))
+        response = _wait(self.set_hw_state_client.call_async(request), timeout_s, "set_hardware_component_state")
+        if not response.ok:
+            raise CapabilityError(f"could not set {self.arm.hardware_component} to lifecycle state {target_state_id}")
 
     def execute(self, trajectory: JointTrajectory, timeout_s: float = 60.0):
         if not self.arm_action.wait_for_server(timeout_sec=2.0):

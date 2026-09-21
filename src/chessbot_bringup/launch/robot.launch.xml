@@ -20,7 +20,9 @@
   <arg name="container" default="robot_io" />
   <arg name="world" default="$(find-pkg-share chessbot_description)/worlds/chessbot.sdf" />
   <arg name="description_file" default="$(find-pkg-share chessbot_description)/urdf/so101.urdf.xacro" />
-  <arg name="controllers_file" default="$(find-pkg-share chessbot_description)/config/controllers.yaml" />
+  <!-- Real servos need looser arrival tolerances than simulated ones; see the file itself. -->
+  <arg name="controllers_file"
+       default="$(eval '&quot;$(find-pkg-share chessbot_description)/config/controllers.yaml&quot; if &quot;$(var hardware)&quot; == &quot;gazebo&quot; else &quot;$(find-pkg-share chessbot_description)/config/controllers_real.yaml&quot;')" />
   <arg name="cameras" default="true" description="Cameras: simulated or USB. False speeds up motion tests." />
   <arg name="contact_sensors" default="true"
        description="Simulated contact sensors on the arm; the motion scenarios measure collisions with them. Turning them off barely changes the simulation's speed (0.34 against 0.32 real time), so leave them on unless you want the topics quiet." />
@@ -53,6 +55,16 @@
         <param name="use_sim_time" value="true" />
         <extra_arg name="use_intra_process_comms" value="true" />
       </composable_node>
+      <!-- A no-op here (a simulated camera has no distortion to correct), but it means
+           /overhead_camera/image_rect exists on both backends, so the application layer above
+           this file can stay the same either way rather than knowing which one it is running
+           against. -->
+      <composable_node pkg="image_proc" plugin="image_proc::RectifyNode" name="rectify_overhead"
+                       namespace="overhead_camera">
+        <remap from="image" to="image_raw" />
+        <param name="use_sim_time" value="true" />
+        <extra_arg name="use_intra_process_comms" value="true" />
+      </composable_node>
     </load_composable_node>
 
     <!-- Spawn from the topic robot_state_publisher latches, rather than passing the URDF as
@@ -74,6 +86,15 @@
           <param from="$(find-pkg-share chessbot_bringup)/config/cameras/overhead.yaml" />
           <param name="video_device" value="$(var overhead_device)" />
           <param name="camera_info_url" value="file://$(find-pkg-share chessbot_bringup)/config/cameras/overhead_intrinsics.yaml" />
+          <extra_arg name="use_intra_process_comms" value="true" />
+        </composable_node>
+        <!-- A simulated camera is already an ideal pinhole; a real lens is not. Calibration's
+             pinhole math assumes undistorted pixels either way, so the real feed is rectified
+             here rather than taught distortion terms - a no-op until overhead_intrinsics.yaml
+             carries real distortion coefficients, then a real correction with no code change. -->
+        <composable_node pkg="image_proc" plugin="image_proc::RectifyNode" name="rectify_overhead"
+                         namespace="overhead_camera">
+          <remap from="image" to="image_raw" />
           <extra_arg name="use_intra_process_comms" value="true" />
         </composable_node>
       </load_composable_node>

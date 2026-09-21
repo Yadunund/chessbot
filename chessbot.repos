@@ -4,7 +4,7 @@ repositories:
   rerun_ros_bridge:
     type: git
     url: git@github.com:Yadunund/rerun_ros_bridge.git
-    version: d3c2b88bfea5ba049064640ff30faede118efe66
+    version: 770f4359ab5620de78e19666a2e79eddf3b037dc
   # ros2_control hardware interface for the SO-101's Feetech servos (BSD-3-Clause).
   feetech_ros2_driver:
     type: git

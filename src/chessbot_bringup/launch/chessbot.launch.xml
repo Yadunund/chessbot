@@ -21,7 +21,8 @@
   <arg name="overhead_device" default="/dev/cam_overhead" description="Overhead camera device (hardware:=real)." />
   <arg name="wrist_device" default="/dev/cam_wrist" description="Wrist camera device (hardware:=real)." />
   <arg name="usb_port" default="/dev/so101" description="Servo bus (hardware:=real; udev rules give it this name)." />
-  <arg name="joint_config_file" default="" description="Servo register overrides; empty uses the servos' own calibration." />
+  <arg name="joint_config_file" default=""
+       description="Servo tuning (PID, acceleration, torque limits) - not calibration geometry, which stays in the servos' own EEPROM regardless. Empty by default so a fresh checkout without this file still comes up; pass e.g. $(env HOME)/.chessbot/so101_joints.yaml explicitly once one exists for this rig." />
   <arg name="overhead_xyz" default="0.234 0.0 0.51" description="Overhead camera position in base_link, metres." />
   <arg name="overhead_rpy" default="3.14159 0.0 -1.5708" description="Overhead camera orientation (optical frame)." />
 

@@ -192,23 +192,82 @@ button.ghost { background: transparent; }
 .mono { font: 12px/1.6 var(--mono); color: var(--smoke); font-variant-numeric: tabular-nums; }
 .step { font-size: 12px; color: var(--smoke); display: inline-flex; align-items: center; gap: 6px; }
 .jog-pad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
-.jog-pad button { padding: 10px 0; font: 13px/1 var(--mono); }
+.jog-pad button { padding: 10px 0; font: 13px/1 var(--mono); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.jog-joints { display: grid; grid-template-columns: 1fr auto auto; gap: 6px 8px; align-items: center; margin-top: 8px; }
+.jog-joints .name { font: 12px/1.6 var(--mono); color: var(--smoke); }
+.jog-joints .value { font-variant-numeric: tabular-nums; }
+.jog-joints button { padding: 6px 12px; font: 13px/1 var(--mono); touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.jog-speed { display: inline-flex; align-items: center; gap: 6px; }
+/* Native range inputs inset the track within their own box by varying amounts per browser, so
+   the thumb never quite reaches the box's true edge even at the max value. Styled by hand
+   instead, so 100% actually sits at the right edge. */
+.jog-speed input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 90px;
+  height: 4px;
+  margin: 0;
+  background: var(--stone);
+  border-radius: 9999px;
+  outline: none;
+}
+.jog-speed input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--graphite);
+  cursor: pointer;
+}
+.jog-speed input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: var(--graphite);
+  cursor: pointer;
+}
+.jog-speed input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: var(--stone);
+  border-radius: 9999px;
+}
 
-.setup { border: none; border-radius: 20px; padding: 0; max-width: 560px; width: calc(100% - 32px); background: var(--eggshell); color: var(--ink); }
+.touch-points { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; padding: 0; }
+.touch-points li { padding: 4px 12px; border-radius: 9999px; border: 1px solid var(--button-line);
+  font: 12px/1.4 var(--mono); color: var(--smoke); background: var(--taupe); }
+.touch-points li.next { color: var(--ink); border-color: var(--graphite); }
+.touch-points li.done { color: var(--graphite); background: var(--stone); }
+
+/* The steps are taller than most screens, so the dialog scrolls and the header stays put:
+   without this the last step (Save) sits below the fold and cannot be reached at all. */
+.setup { border: none; border-radius: 20px; padding: 0; max-width: 560px; width: calc(100% - 32px);
+  max-height: min(88vh, 900px); overflow: hidden; background: var(--eggshell); color: var(--ink); }
+/* Only when open: a display on the dialog itself overrides the browser's own display:none
+   for the closed state, which leaves the wizard permanently on screen and impossible to shut. */
+.setup[open] { display: flex; flex-direction: column; }
+.setup .steps { overflow-y: auto; overscroll-behavior: contain; }
 .setup::backdrop { background: rgb(28 26 24 / 0.4); }
-.setup-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 24px 0; margin: 0; }
+.setup-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 24px 12px; margin: 0;
+  flex: none; border-bottom: 1px solid var(--stone); background: var(--eggshell); }
 .setup-head h2 { margin: 0; }
 .steps { list-style: none; margin: 0; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 20px; }
 .steps li { border-top: 1px solid var(--stone); padding-top: 16px; }
 .steps li:first-child { border-top: none; padding-top: 0; }
 .steps h3 { margin: 0 0 6px; font-size: 15px; }
+.steps .optional { font-weight: 400; font-size: 12px; color: var(--ash); margin-left: 6px; }
 .steps p { margin: 0 0 10px; font-size: 13px; color: var(--graphite); }
 .steps .result { font: 12px/1.5 var(--mono); color: var(--smoke); min-height: 1.4em; }
 .shot { position: relative; margin-bottom: 10px; border-radius: 12px; overflow: hidden; background: var(--taupe); }
 .shot img { display: block; width: 100%; cursor: crosshair; }
 .shot svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.shot .mark { fill: none; stroke: var(--ink); stroke-width: 0.6; vector-effect: non-scaling-stroke; }
-.shot .mark-label { fill: var(--ink); font: 3px var(--mono); }
+/* Marks sit on a photograph of whatever the camera sees, which is often dark and cluttered,
+   so they carry their own contrast rather than borrowing the page's. */
+.shot .mark { fill: none; stroke: #fff; stroke-width: 2.5; vector-effect: non-scaling-stroke;
+  paint-order: stroke; filter: drop-shadow(0 0 2px rgb(0 0 0 / 0.9)); }
+.shot .mark-label { fill: #fff; font: 700 4.5px var(--mono); paint-order: stroke;
+  stroke: rgb(0 0 0 / 0.85); stroke-width: 1.6; }
 
 /* Phones: after the base rules so these win. */
 @media (max-width: 520px) {

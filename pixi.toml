@@ -69,8 +69,15 @@ ros-lyrical-rmw-zenoh-cpp = "*"
 ros-lyrical-robot-state-publisher = "*"
 ros-lyrical-tf2-ros = "*"
 ros-lyrical-control-msgs = "*"
+# The Rerun bridge logs these as spatial archetypes (paths, occupancy grids, markers).
+ros-lyrical-nav-msgs = "*"
+ros-lyrical-visualization-msgs = "*"
 ros-lyrical-moveit-msgs = "*"
 ros-lyrical-vision-msgs = "*"
+# Rectifies the real overhead camera (image_proc) and calibrates its real intrinsics
+# (camera_calibration) - the pinhole math calibration already assumes is undistorted, which a
+# real lens is not, but a simulated camera already is.
+ros-lyrical-image-pipeline = "*"
 # ros2_control
 ros-lyrical-controller-manager = "*"
 ros-lyrical-joint-state-broadcaster = "*"
@@ -130,7 +137,7 @@ LDFLAGS = "-Wl,--as-needed ${LDFLAGS}"
 
 [tasks]
 import-deps = { cmd = "mkdir -p external && vcs import external < chessbot.repos" }
-build = { cmd = "colcon build --symlink-install --base-paths src external", depends-on = ["import-deps"] }
+build = { cmd = "colcon build --symlink-install --base-paths src external" }
 so101-urdf = { cmd = "bash -c 'source install/setup.bash && mkdir -p generated && xacro install/so_arm101_description/share/so_arm101_description/urdf/so_arm101.urdf.xacro > generated/so101.urdf'", depends-on = ["build"] }
 reach-check = { cmd = "python tools/reach_check.py --urdf generated/so101.urdf", depends-on = ["so101-urdf"] }
 # Stockfish: separate GPL-3.0 executable, built from pinned upstream source for the host CPU.

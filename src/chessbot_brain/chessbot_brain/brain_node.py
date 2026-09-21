@@ -85,6 +85,8 @@ PACKAGE_FILE_EXTENSIONS = {".stl", ".dae", ".obj", ".glb", ".gltf", ".json"}
 # the base, within reach, and above the table. An uncalibrated rig does not know where the
 # board is, so nothing may be commanded outside this.
 JOG_BOX = ((0.08, 0.30), (-0.18, 0.18), (0.04, 0.30))
+# Most one press of a per-joint jog may turn a joint, radians (about 17 degrees).
+MAX_JOINT_JOG = 0.3
 
 
 class Busy(RuntimeError):
@@ -117,6 +119,8 @@ class BrainNode(Node):
             pick_offset=float(self.declare_parameter("pick_offset", 0.010).value),
             place_offset=float(self.declare_parameter("place_offset", 0.0075).value),
             joint_speed=float(self.declare_parameter("joint_speed", 1.6).value),
+            hardware_component=self.declare_parameter("hardware_component", "SO_ARM101").value,
+            controller=self.declare_parameter("arm_controller_name", "arm_controller").value,
         )
         zenoh_endpoint = self.declare_parameter("zenoh_endpoint", "tcp/127.0.0.1:7447").value
         default_stockfish = os.path.join(os.environ.get("PIXI_PROJECT_ROOT", ""), "generated", "bin", "stockfish")
@@ -254,6 +258,13 @@ class BrainNode(Node):
                 "thoughts": list(self.thoughts)[-50:],
                 "busy": self.current_job,
                 "last_error": self.last_error,
+                # So the per-joint jog UI can list this robot's actual joints instead of
+                # hardcoding SO-101's - a short label derived generically from the name, not
+                # assumed from it.
+                "arm_joints": [
+                    {"name": name, "label": name.removesuffix("_joint").replace("_", " ")}
+                    for name in self.caps.arm.joints
+                ],
                 "capabilities": self.caps.status(),
             }
 
@@ -284,6 +295,23 @@ class BrainNode(Node):
                 self.publish_state()
 
         self._jobs.submit(run)
+
+    def run_now(self, name: str, fn, *args):
+        """Run a short job inline and return its result, under `submit`'s one-at-a-time lock.
+
+        The calibration wizard needs the new state in the response, so those steps cannot go
+        on the worker thread. They still have to be exclusive with whatever the worker is
+        doing: releasing the arm while a trajectory is running cuts torque under a moving arm.
+        """
+        if not self._busy.acquire(blocking=False):
+            raise Busy(f"busy with {self.current_job}")
+        self.current_job = name
+        try:
+            return fn(*args)
+        finally:
+            self.current_job = ""
+            self._busy.release()
+            self.publish_state()
 
     def geometry(self) -> BoardGeometry:
         data = self.caps.kv_get("chessbot/kv/calibration")
@@ -529,7 +557,7 @@ class BrainNode(Node):
         self._commentary.submit(self._comment_on, fen_before, human_move, reply)
 
         self.set_phase(GameState.PHASE_VERIFYING)
-        skills.park(self.caps, self.park_joints, self.geometry_if_calibrated())
+        skills.park(self.caps, self.park_pose(), self.geometry_if_calibrated())
         response = self.caps.board_state(max_frame_age_s=1.0)
         self.think(Thought.VERIFY, f"Verification: {BOARD_RESULT_TEXT.get(response.result, 'unknown result')}.")
         if self._game_over():
@@ -546,8 +574,18 @@ class BrainNode(Node):
         self.think(Thought.VERIFY, f"Calibration finished (result {result.result}) → {result.profile_path}")
         self.set_phase(previous)
 
+    def park_pose(self) -> list[float]:
+        """Where the arm waits: what calibration stored, else the launch parameter.
+
+        Read on each park rather than cached, so a pose saved through the setup workflow
+        applies immediately and still applies after a restart.
+        """
+        profile = self.caps.kv_get("chessbot/kv/calibration") or {}
+        stored = [float(v) for v in (profile.get("park_joints") or [])]
+        return stored if len(stored) == len(self.caps.arm.joints) else list(self.park_joints)
+
     def job_park(self):
-        skills.park(self.caps, self.park_joints, self.geometry_if_calibrated())
+        skills.park(self.caps, self.park_pose(), self.geometry_if_calibrated())
         self.think(Thought.ACT, "Arm parked.")
 
     def job_resume(self):
@@ -559,21 +597,49 @@ class BrainNode(Node):
     # Every target is kept inside JOG_BOX: on a rig that is not calibrated yet the arm has no
     # idea where the board is, and the way to find that out is not by driving into it.
 
-    def job_move_tool(self, xyz, yaw_deg: float):
+    def job_move_tool(self, xyz, yaw_deg: float, speed_pct: float | None = None):
+        """Move to an absolute tool target.
+
+        `speed_pct` is only given by the jog UI's press-and-hold loop: it switches to the
+        single-waypoint jog trajectory (see `Capabilities.jog_trajectory`) so repeated calls
+        blend continuously instead of resetting to a stop each time. A deliberate one-off move
+        (park-pose jogging, the dev "move tool" control) leaves it unset and keeps the eased,
+        come-to-a-stop profile.
+        """
         target = tuple(min(max(v, lo), hi) for v, (lo, hi) in zip(xyz, JOG_BOX))
         if tuple(xyz) != target:
             self.think(Thought.EXPLAIN, f"Kept inside the safe box: asked {tuple(round(v, 3) for v in xyz)}, "
                                         f"moving to {tuple(round(v, 3) for v in target)}.")
         solution = self.caps.solve_ik(target, tool_down(math.radians(yaw_deg)))
-        self.caps.execute(self.caps.joint_move_trajectory(solution))
+        if speed_pct is None:
+            self.caps.execute(self.caps.joint_move_trajectory(solution))
+        else:
+            self.caps.execute(self.caps.jog_trajectory(solution, speed_pct / 100.0))
         self.think(Thought.ACT, f"Tool at {tuple(round(v, 3) for v in target)}.")
 
-    def job_jog(self, axis: str, delta_m: float):
+    def job_jog(self, axis: str, delta_m: float, speed_pct: float = 100.0):
         (x, y, z), yaw = self.caps.tool_pose()
         step = {"x": (delta_m, 0.0, 0.0), "y": (0.0, delta_m, 0.0), "z": (0.0, 0.0, delta_m)}.get(axis)
         if step is None:
             raise CapabilityError(f"unknown axis {axis!r}")
-        self.job_move_tool((x + step[0], y + step[1], z + step[2]), math.degrees(yaw))
+        self.job_move_tool((x + step[0], y + step[1], z + step[2]), math.degrees(yaw), speed_pct)
+
+    def job_jog_joint(self, joint: str, delta_rad: float, speed_pct: float = 100.0):
+        """Turn one joint by a small amount.
+
+        Unlike the Cartesian jog this does not go through IK, so it can reach poses no tool
+        target describes - which is the point when posing the arm by hand - and it is not
+        bounded by the safe box. The step is capped instead, so a mistyped request cannot
+        throw the arm across the table.
+        """
+        names = list(self.caps.arm.joints)
+        if joint not in names:
+            raise CapabilityError(f"unknown joint {joint!r}")
+        step = max(-MAX_JOINT_JOG, min(MAX_JOINT_JOG, float(delta_rad)))
+        target = self.caps.joint_positions()
+        target[names.index(joint)] += step
+        self.caps.execute(self.caps.jog_trajectory(target, speed_pct / 100.0))
+        self.think(Thought.ACT, f"{joint} to {target[names.index(joint)]:.3f} rad.")
 
     def job_gripper(self, position: float):
         self.caps.gripper(position)
@@ -581,72 +647,161 @@ class BrainNode(Node):
 
     # --- guided calibration ----------------------------------------------------------
 
-    def job_calibrate_camera(self):
-        """Show the camera the gripper at several poses, and fit the camera's pose to that.
+    def calibration_release_arm(self) -> dict:
+        """Stop the arm controller and cut torque, so a person can hand-guide it.
 
-        The gripper is the only calibration target a real rig always has. Opening the jaws
-        moves them and nothing else, so differencing a closed and an open frame finds them in
-        the image without any marker or template.
+        The gripper is the only calibration target a real rig always has, and the only way to
+        get an honest 3D position for it is to ask the robot's own forward kinematics - not
+        make the camera find it. Releasing the arm is step one of that: nothing is recorded
+        until a person confirms a touch (`calibration_touch`). Doesn't require the board to be
+        marked first - a touch is just an FK reading against a point name, independent of
+        pixels, so it can happen before, after, or interleaved with marking the board.
         """
-        previous = self.phase
-        self.set_phase(GameState.PHASE_CALIBRATING)
-        try:
-            centre = self.caps.camera_centre()
-            frame = self.caps.camera_raw()
-            if frame is None:
-                raise CapabilityError("no camera frames")
-            centre_px = (centre[0], centre[1]) if centre and centre[0] else (frame.width / 2, frame.height / 2)
-            focal_px = centre[2] if centre and centre[2] > 100.0 else calib.DEFAULT_FOCAL_PX
+        self.caps.release_arm()
+        self.draft.arm_released = True
+        self.think(Thought.EXPLAIN, "Arm released - torque is off, guide it by hand.")
+        return self.draft.steps()
 
-            samples = []
-            self.caps.gripper(self.caps.arm.gripper_closed)
-            for target in calib.CAMERA_SAMPLES:
-                try:
-                    solution = self.caps.solve_ik(target, tool_down(0.0))
-                except CapabilityError:
-                    continue
-                self.caps.execute(self.caps.joint_move_trajectory(solution))
-                closed = self.caps.camera_raw()
-                self.caps.gripper(self.caps.arm.gripper_open)
-                opened = self.caps.camera_raw()
-                self.caps.gripper(self.caps.arm.gripper_closed)
-                position, _yaw = self.caps.tool_pose()
-                pixel, changed = calib.moved_pixel(closed, opened)
-                if pixel is None:
-                    continue
-                samples.append((position, pixel, changed))
-                self.think(Thought.PERCEIVE, f"Gripper at {tuple(round(v, 3) for v in position)} "
-                                             f"seen at ({pixel[0]:.0f}, {pixel[1]:.0f}).")
+    def calibration_touch(self) -> dict:
+        """Record the next unrecorded touch point at the arm's current (hand-guided) position.
 
-            kept = calib.keep_consistent(samples)
-            if len(kept) < len(samples):
-                self.think(Thought.PERCEIVE, f"Ignored {len(samples) - len(kept)} poses where more than "
-                                             "the jaws moved.")
-            if len(kept) < 5:
-                self.think(Thought.RECOVER, f"Only saw the gripper cleanly at {len(kept)} poses; need 5. "
-                                            "Check that the arm is in the camera's view and well lit.")
-                return
-            points = [position for position, _pixel, _count in kept]
-            pixels = [pixel for _position, pixel, _count in kept]
-            model = calib.fit_camera(points, pixels, centre_px, focal_px)
-            self.draft.camera = model
-            self.think(Thought.VERIFY, f"Camera at {tuple(round(v, 3) for v in model.position)}, "
-                                       f"fit {model.error_mean_px:.0f} px mean over {len(kept)} poses.")
-        finally:
-            self.set_phase(previous)
+        Nothing is recorded on a whim - the arm has to actually be released first, and this is
+        only ever called from an explicit "confirm" press once the person has the tool tip on
+        the point, so a person watching the live pose readout is always the one deciding when a
+        touch counts.
+        """
+        if not self.draft.arm_released:
+            raise CapabilityError("release the arm first")
+        name = next((n for n in calib.CAMERA_TOUCH_POINTS if n not in self.draft.touched), None)
+        if name is None:
+            raise CapabilityError("every point is already touched")
+        position, _yaw = self.caps.tool_pose()
+        self.draft.touched[name] = position
+        self.think(Thought.PERCEIVE, f"Touched {name} at {tuple(round(v, 3) for v in position)}.")
+        return self.draft.steps()
 
-    def calibration_board(self, corners) -> dict:
-        """The board pose implied by four corners marked in the camera image (a1, h1, h8, a8)."""
-        if self.draft.camera is None:
-            raise CapabilityError("measure the camera first")
-        board = calib.board_from_corners(self.draft.camera, corners)
+    def calibration_reactivate_arm(self) -> dict:
+        """Undo `calibration_release_arm`: torque back on, controller back in charge."""
+        self.caps.reactivate_arm()
+        self.draft.arm_released = False
+        self.think(Thought.EXPLAIN, "Arm re-engaged.")
+        return self.draft.steps()
+
+    def calibration_camera_fit(self) -> dict:
+        """Fit the camera's pose to the touched (3D) / clicked (2D) correspondences.
+
+        Both halves come from points the person handled directly - FK for where they guided
+        the gripper, the same clicks already taken to mark the board - so this is an ordinary
+        camera resectioning fit (`calib.fit_camera`), not anything specific to how the points
+        were gathered.
+        """
+        if self.draft.board_corners_px is None:
+            raise CapabilityError("mark the board's corners first")
+        touched = [(name, self.draft.touched[name]) for name in calib.CAMERA_TOUCH_POINTS
+                   if name in self.draft.touched]
+        if len(touched) < len(calib.CAMERA_TOUCH_POINTS):
+            raise CapabilityError(
+                f"only {len(touched)} of {len(calib.CAMERA_TOUCH_POINTS)} points touched; "
+                "the fit needs all of them")
+        points = [pos for _name, pos in touched]
+        pixels = [self.draft.board_corners_px[calib.CAMERA_TOUCH_POINTS.index(name)] for name, _pos in touched]
+        centre = self.caps.camera_centre()
+        frame = self.caps.camera_raw()
+        if frame is None:
+            raise CapabilityError("no camera frames")
+        centre_px = (centre[0], centre[1]) if centre and centre[0] else (frame.width / 2, frame.height / 2)
+        focal_px = centre[2] if centre and centre[2] > 100.0 else calib.DEFAULT_FOCAL_PX
+        model = calib.fit_camera(points, pixels, centre_px, focal_px)
+        self.draft.camera = model
+        self.think(Thought.VERIFY, f"Camera at {tuple(round(v, 3) for v in model.position)}, "
+                                   f"fit {model.error_mean_px:.0f} px mean over {len(touched)} points.")
+        # The board's pose was computed through whichever camera model was current when its
+        # corners were clicked - the nominal one, if this is the first refinement. Redo that
+        # math now through the just-fitted camera, so the board doesn't stay stuck on a stale
+        # projection of the same clicks.
+        self._apply_board(self.draft.surface_height_m)
+        return self.draft.steps()
+
+    def camera_model(self) -> calib.CameraModel:
+        """The camera to measure the board against.
+
+        The refined one if it has been measured, otherwise the one the robot description
+        already carries, read through TF. Marking the board is the only step that is really
+        needed: measuring the camera makes it more accurate where the mount is not where the
+        description says.
+        """
+        if self.draft.camera is not None:
+            return self.draft.camera
+        position, rpy = self.caps.camera_pose()
+        centre = self.caps.camera_centre()
+        frame = self.caps.camera_raw()
+        # The frame is only needed when camera_info cannot give the principal point, so it is
+        # the pair that has to be usable, not either one on its own.
+        if frame is None and not (centre and centre[0]):
+            raise CapabilityError("no camera frames or camera_info yet")
+        centre_px = (centre[0], centre[1]) if centre and centre[0] else (frame.width / 2, frame.height / 2)
+        focal_px = centre[2] if centre and centre[2] > 100.0 else calib.DEFAULT_FOCAL_PX
+        return calib.CameraModel(position=position, rpy=rpy, focal_px=focal_px, centre_px=centre_px)
+
+    def calibration_board(self, corners, surface_height_m: float = 0.0) -> dict:
+        """The board pose implied by four corners marked in the camera image (a1, h1, h8, a8).
+
+        These clicks double as the 2D half of the camera step's correspondences, so they are
+        kept and that step doesn't ask again. Touches are paired with them by corner name, and
+        a fresh set of clicks can put those names on different physical corners, so touches
+        already taken are dropped rather than silently paired with the wrong pixel. Relabelling
+        the same four clicks is `calibration_rotate_board`, which keeps them.
+        """
+        corners = list(corners)
+        if self.draft.touched and corners != self.draft.board_corners_px:
+            self.draft.touched.clear()
+            self.think(Thought.EXPLAIN,
+                       "The corners were marked again, so the touched points no longer line up "
+                       "with them. Touch them again to refine the camera.")
+        self.draft.board_corners_px = corners
+        return self._apply_board(surface_height_m)
+
+    def calibration_rotate_board(self) -> dict:
+        """Relabel the marked corners half a turn: what was marked h8 becomes a1.
+
+        The clicks and the touches are relabelled together. They are paired by corner name, so
+        moving the labels on one side alone would pair every touched point with the wrong pixel
+        and fit a camera that is confidently wrong.
+        """
+        if self.draft.board_corners_px is None:
+            raise CapabilityError("mark the board's corners first")
+        names = calib.CAMERA_TOUCH_POINTS
+        half = len(names) // 2
+        self.draft.board_corners_px = self.draft.board_corners_px[half:] + self.draft.board_corners_px[:half]
+        self.draft.touched = {names[(i + half) % len(names)]: self.draft.touched[name]
+                              for i, name in enumerate(names) if name in self.draft.touched}
+        self.think(Thought.EXPLAIN, "Corners turned half a turn: what was marked h8 is now a1.")
+        return self._apply_board(self.draft.surface_height_m)
+
+    def calibration_recompute_board(self, surface_height_m: float | None = None) -> dict:
+        """Redo the board-from-corners math against the same clicked corners, no re-clicking.
+
+        Covers two cases: the surface height was wrong and needs correcting without marking
+        the board again, and the camera has just been refined by the touch-off step and the
+        board's pose needs to catch up to it (also done automatically after a camera fit, but
+        available here to re-run by hand too).
+        """
+        if self.draft.board_corners_px is None:
+            raise CapabilityError("mark the board's corners first")
+        height = self.draft.surface_height_m if surface_height_m is None else surface_height_m
+        return self._apply_board(height)
+
+    def _apply_board(self, surface_height_m: float) -> dict:
+        board = calib.board_from_corners(self.camera_model(), self.draft.board_corners_px, surface_height_m)
         if board is None:
             raise CapabilityError("those corners do not point at the table")
+        self.draft.surface_height_m = surface_height_m
         self.draft.board_origin_xyz = board.origin_xyz
         self.draft.board_yaw_rad = board.yaw_rad
         self.draft.square_size_m = board.square_size_m
         self.draft.squareness_m = board.squareness_m
         self.draft.unreachable = self.unreachable_squares(board.origin_xyz, board.yaw_rad, board.square_size_m)
+        self.draft.orientation = self.orientation_check(board.origin_xyz, board.yaw_rad, board.square_size_m)
         self.think(
             Thought.VERIFY,
             f"Board at {tuple(round(v, 3) for v in board.origin_xyz)}, "
@@ -654,6 +809,24 @@ class BrainNode(Node):
             f"{len(self.draft.unreachable)} squares out of reach.",
         )
         return self.draft.steps()
+
+    def orientation_check(self, origin_xyz, yaw_rad: float, square_size_m: float) -> str:
+        """Whether the board is the right way round, judged by which end the robot sits at.
+
+        a1 is defined from White's seat, but the corners are marked on a photograph taken from
+        somewhere else entirely, so it is easy to mark the board a half turn out. Nothing in the
+        image says which way round it is - a board rotated 180 degrees still covers exactly the
+        same squares - but the robot knows which colour it plays, and its own back rank has to
+        be the end nearest it.
+        """
+        centres = calib.square_centres(origin_xyz, yaw_rad, square_size_m)
+        near_rank_1 = min(math.hypot(*centres[f"{f}1"][:2]) for f in "abcdefgh")
+        near_rank_8 = min(math.hypot(*centres[f"{f}8"][:2]) for f in "abcdefgh")
+        robot_back_rank_is_near = near_rank_8 < near_rank_1 if self.robot_side == "black" else near_rank_1 < near_rank_8
+        if robot_back_rank_is_near:
+            return ""
+        return (f"The robot plays {self.robot_side}, so rank {8 if self.robot_side == 'black' else 1} should be "
+                "the end nearest it, and it is not. The corners are probably marked half a turn out.")
 
     def unreachable_squares(self, origin_xyz, yaw_rad: float, square_size_m: float) -> list[str]:
         """Which squares the arm cannot reach, at the height it grasps a piece."""
@@ -666,8 +839,13 @@ class BrainNode(Node):
         return out
 
     def calibration_park_here(self) -> dict:
-        """Take the arm's current joints as the park pose: jog it there, then save it."""
+        """Take the arm's current joints as the park pose: jog it there, then save it.
+
+        Applied straight away, so Home goes to it before the calibration is saved; saving is
+        what makes it survive a restart.
+        """
         self.draft.park_joints = self.caps.joint_positions()
+        self.park_joints = list(self.draft.park_joints)
         self.think(Thought.EXPLAIN, f"Park pose set to {[round(v, 3) for v in self.draft.park_joints]}.")
         return self.draft.steps()
 
@@ -716,7 +894,7 @@ class BrainNode(Node):
         others = self.believed_pieces(geometry)
         others.pop(src, None)
         skills.transfer(self.caps, geometry, geometry.square_centre(src), geometry.square_centre(dst), list(others.values()))
-        skills.park(self.caps, self.park_joints, self.geometry_if_calibrated())
+        skills.park(self.caps, self.park_pose(), self.geometry_if_calibrated())
         self.set_phase(previous)
 
 
@@ -756,6 +934,13 @@ class MoveTool(BaseModel):
 class Jog(BaseModel):
     axis: str
     delta_m: float
+    speed_pct: float = 100.0
+
+
+class JogJoint(BaseModel):
+    joint: str
+    delta_rad: float
+    speed_pct: float = 100.0
 
 
 class Gripper(BaseModel):
@@ -767,6 +952,14 @@ class BoardCorners(BaseModel):
     """The board's four outer corners in the camera image, in the order a1, h1, h8, a8."""
 
     corners: list[list[float]]
+    # How far the squares sit above the table: the thickness of a folding board's case.
+    surface_height_m: float = 0.0
+
+
+class RecomputeBoard(BaseModel):
+    """Redo the board math against corners already clicked. Omit to just reuse the last height."""
+
+    surface_height_m: float | None = None
 
 
 def build_app(node: BrainNode) -> FastAPI:
@@ -781,6 +974,15 @@ def build_app(node: BrainNode) -> FastAPI:
         except Busy as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"accepted": name}
+
+    def run_now(name, fn, *args):
+        """A wizard step, run under the job lock, answering with the state it produced."""
+        try:
+            return node.run_now(name, fn, *args)
+        except Busy as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except CapabilityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/state")
     def state():
@@ -841,7 +1043,11 @@ def build_app(node: BrainNode) -> FastAPI:
     def jog(body: Jog):
         if body.axis not in ("x", "y", "z"):
             raise HTTPException(status_code=422, detail="axis must be x, y or z")
-        return submit("jog", node.job_jog, body.axis, body.delta_m)
+        return submit("jog", node.job_jog, body.axis, body.delta_m, body.speed_pct)
+
+    @app.post("/api/dev/jog_joint")
+    def jog_joint(body: JogJoint):
+        return submit("jog_joint", node.job_jog_joint, body.joint, body.delta_rad, body.speed_pct)
 
     @app.post("/api/dev/gripper")
     def gripper(body: Gripper):
@@ -866,16 +1072,45 @@ def build_app(node: BrainNode) -> FastAPI:
         stored = node.caps.kv_get("chessbot/kv/calibration")
         return {"stored": stored, "draft": node.draft.steps()}
 
+    # The release cycle takes the arm's torque away and the touches read its pose, so these
+    # run under the job lock rather than beside whatever the worker thread is doing.
     @app.post("/api/calibration/camera")
     def calibration_camera():
-        return submit("calibrate_camera", node.job_calibrate_camera)
+        return run_now("calibrate_camera", node.calibration_camera_fit)
+
+    @app.post("/api/calibration/camera/release")
+    def calibration_camera_release():
+        return run_now("release_arm", node.calibration_release_arm)
+
+    @app.post("/api/calibration/camera/touch")
+    def calibration_camera_touch():
+        return run_now("touch", node.calibration_touch)
+
+    @app.post("/api/calibration/camera/reactivate")
+    def calibration_camera_reactivate():
+        return run_now("reactivate_arm", node.calibration_reactivate_arm)
 
     @app.post("/api/calibration/board")
     def calibration_board(body: BoardCorners):
         if len(body.corners) != 4:
             raise HTTPException(status_code=422, detail="give four corners: a1, h1, h8, a8")
         try:
-            return node.calibration_board([(float(c[0]), float(c[1])) for c in body.corners])
+            return node.calibration_board([(float(c[0]), float(c[1])) for c in body.corners],
+                                          float(body.surface_height_m))
+        except CapabilityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/board/recompute")
+    def calibration_board_recompute(body: RecomputeBoard):
+        try:
+            return node.calibration_recompute_board(body.surface_height_m)
+        except CapabilityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/board/rotate")
+    def calibration_board_rotate():
+        try:
+            return node.calibration_rotate_board()
         except CapabilityError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

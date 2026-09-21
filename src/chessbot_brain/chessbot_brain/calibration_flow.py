@@ -6,11 +6,13 @@ Nothing about a real setup can be assumed: the camera is mounted wherever it fit
 is put down wherever there is room, and the arm's resting pose has to keep clear of both. So
 calibration is a conversation, not a measurement the robot can take alone:
 
-  1. camera  - the arm shows the camera its own gripper, and the camera pose is fitted to it.
-               Fully automatic, but it needs the arm to be free to move.
-  2. board   - the person marks the board's four corners in the camera image. Those pixels
+  1. board   - the person marks the board's four corners in the camera image. Those pixels
                back-project onto the table plane, which gives the board's origin, rotation
                and square size in the robot's frame.
+  2. camera  - the person hand-guides the gripper to touch those same four corners (torque
+               released, so the arm moves freely and is read passively) while the board step's
+               pixel clicks are reused as the other half of each correspondence. The camera
+               pose is fitted to the resulting (touched 3D, clicked 2D) pairs.
   3. reach   - every square is checked against IK, so a board placed out of reach is caught
                here rather than by the arm straining at it.
   4. park    - the arm is jogged to where it should wait, and that pose is saved.
@@ -33,57 +35,9 @@ import numpy as np
 # A Logitech C920 at 1280x720: 70.4 degrees across. Only a starting point - camera_info is
 # used when it carries something real.
 DEFAULT_FOCAL_PX = 907.0
-# Tool-down poses used to show the camera the gripper. Kept low, because a short arm cannot
-# hold the tool down much higher, and inside the same safe box as manual control.
-CAMERA_SAMPLES = [
-    (0.16, -0.10, 0.08), (0.16, 0.10, 0.08), (0.20, -0.06, 0.08), (0.20, 0.06, 0.08),
-    (0.23, -0.07, 0.08), (0.23, 0.07, 0.08), (0.20, -0.06, 0.11), (0.20, 0.06, 0.11),
-    (0.23, -0.07, 0.11), (0.23, 0.07, 0.11),
-]
-
-
-def as_array(msg) -> np.ndarray:
-    """A sensor_msgs/Image as an RGB array."""
-    data = np.frombuffer(bytes(msg.data), dtype=np.uint8)
-    image = data.reshape(msg.height, msg.step // 3, 3)[:, : msg.width, :]
-    return image[:, :, ::-1] if msg.encoding == "bgr8" else image
-
-
-def moved_pixel(before, after, threshold: int = 35, min_pixels: int = 40):
-    """Where the picture changed between two frames, and how much of it changed.
-
-    Used with the jaws closed and then open: the jaws are then the only thing that moved, so
-    this is where the gripper is in the image. Returns (pixel, changed pixel count) so the
-    caller can throw out samples where something else moved too - see `keep_consistent`.
-    """
-    if before is None or after is None:
-        return None, 0
-    first, second = as_array(before).astype(np.int16), as_array(after).astype(np.int16)
-    if first.shape != second.shape:
-        return None, 0
-    difference = np.abs(second - first).sum(axis=2)
-    mask = difference > threshold * 3
-    changed = int(mask.sum())
-    if changed < min_pixels:
-        return None, changed
-    ys, xs = np.nonzero(mask)
-    weights = difference[ys, xs].astype(float)
-    centre = (float((xs * weights).sum() / weights.sum()), float((ys * weights).sum() / weights.sum()))
-    return centre, changed
-
-
-def keep_consistent(samples, low: float = 0.4, high: float = 2.5):
-    """Drop samples whose changed area is nothing like the rest.
-
-    The jaws sweep about the same area whichever pose they are in, so a sample that changed
-    several times more pixels than the others had something else moving in it - usually the
-    whole arm flexing as the gripper actuates - and its centroid is not the gripper. Those
-    samples pull the fit badly, and are cheaper to discard than to model.
-    """
-    if len(samples) < 3:
-        return samples
-    median = float(np.median([count for _position, _pixel, count in samples]))
-    return [s for s in samples if low * median <= s[2] <= high * median]
+# The camera step touches the same four corners the board step already had clicked, in the
+# same a1, h1, h8, a8 order - no separate point list to keep in sync.
+CAMERA_TOUCH_POINTS = ("a1", "h1", "h8", "a8")
 
 
 @dataclass
@@ -204,11 +158,23 @@ class BoardFromCorners:
     side_lengths_m: tuple[float, float, float, float]
 
 
-def board_from_corners(camera: CameraModel, corners) -> BoardFromCorners | None:
-    """Back-project four marked corners onto the table and read off the board's pose."""
+def board_from_corners(camera: CameraModel, corners, surface_height_m: float = 0.0) -> BoardFromCorners | None:
+    """Back-project four marked corners onto the playing surface and read off the board's pose.
+
+    `surface_height_m` is how far the squares sit above the table, which for a folding board
+    is the thickness of its case. It matters twice over, and getting it wrong is not obvious:
+    the corners are back-projected onto that plane, so assuming the table pushes the board
+    outwards from under the camera and inflates the square size; and the stored origin carries
+    the height the arm descends to, so an arm told the squares are on the table drives its
+    gripper into a board that is two centimetres higher.
+
+    Projecting the result back onto the image cannot catch this - back-projecting to the wrong
+    plane and projecting back through the same camera is self consistent, and the overlay looks
+    perfect either way. Only a ruler, or the arm touching the surface, can tell.
+    """
     points = []
     for pixel in corners:
-        point = camera.on_plane(pixel)
+        point = camera.on_plane(pixel, surface_height_m)
         if point is None:
             return None
         points.append(np.array(point, float))
@@ -216,13 +182,14 @@ def board_from_corners(camera: CameraModel, corners) -> BoardFromCorners | None:
         return None
 
     a1, h1, h8, a8 = points
+    height = float(a1[2])
     x_axis = ((h1 - a1) + (h8 - a8)) / 2.0
     y_axis = ((a8 - a1) + (h8 - h1)) / 2.0
     sides = (float(np.linalg.norm(h1 - a1)), float(np.linalg.norm(h8 - h1)),
              float(np.linalg.norm(a8 - h8)), float(np.linalg.norm(a1 - a8)))
     board_size = (float(np.linalg.norm(x_axis)) + float(np.linalg.norm(y_axis))) / 2.0
     return BoardFromCorners(
-        origin_xyz=(float(a1[0]), float(a1[1]), 0.0),
+        origin_xyz=(float(a1[0]), float(a1[1]), height),
         yaw_rad=float(math.atan2(x_axis[1], x_axis[0])),
         square_size_m=board_size / 8.0,
         squareness_m=float(max(sides) - min(sides)),
@@ -257,6 +224,20 @@ class Draft:
     squareness_m: float | None = None
     park_joints: list[float] | None = None
     unreachable: list[str] = field(default_factory=list)
+    # Empty when the board is the right way round, otherwise what is wrong with it.
+    orientation: str = ""
+    # The board step's raw pixel clicks (a1, h1, h8, a8 order), kept so the camera step can
+    # reuse them as the 2D half of its correspondences instead of asking again.
+    board_corners_px: list[tuple[float, float]] | None = None
+    # How far the squares sit above the table - kept so the board pose can be recomputed from
+    # the same clicks (a corrected height, or a newly refined camera) without re-marking it.
+    surface_height_m: float = 0.0
+    # Camera touch-off wizard state: whether the arm is currently released (torque off, hand
+    # guidable) and where the gripper tip was for each of CAMERA_TOUCH_POINTS that has been
+    # touched. All four are needed - four correspondences is already the minimum the pose fit
+    # can work from, so there is none to give away.
+    arm_released: bool = False
+    touched: dict[str, tuple[float, float, float]] = field(default_factory=dict)
 
     def steps(self) -> dict:
         """What is done and what is still needed, for the UI to render."""
@@ -273,6 +254,17 @@ class Draft:
                 "square_size_mm": round((self.square_size_m or 0.0) * 1000.0, 1),
                 "squareness_mm": round((self.squareness_m or 0.0) * 1000.0, 1),
             },
-            "reach": {"unreachable": list(self.unreachable)} if self.board_origin_xyz is not None else None,
+            "reach": {"unreachable": list(self.unreachable), "orientation": self.orientation}
+            if self.board_origin_xyz is not None else None,
             "park": None if self.park_joints is None else {"joints": [round(v, 4) for v in self.park_joints]},
+            # A touch can be taken before the board is marked: it is an FK reading against a
+            # point name. The pixel it pairs with is picked up from the board step at fit time,
+            # which is why relabelling the corners relabels these too.
+            "touch": {
+                "arm_released": self.arm_released,
+                "points": [
+                    {"name": name, "done": name in self.touched} for name in CAMERA_TOUCH_POINTS
+                ],
+                "next": next((name for name in CAMERA_TOUCH_POINTS if name not in self.touched), None),
+            },
         }

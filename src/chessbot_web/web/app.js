@@ -186,6 +186,7 @@ async function refresh() {
     state = await res.json();
     renderState();
     renderThoughts(state.thoughts);
+    ensureJointJog();
   } catch (err) {
     $("phase").textContent = "brain unreachable";
   }
@@ -284,19 +285,111 @@ async function refreshToolPose() {
     if (!res.ok) { $("tool-pose").textContent = "tool —"; return; }
     const pose = await res.json();
     const [x, y, z] = pose.xyz;
-    $("tool-pose").textContent = `tool ${(x * 100).toFixed(1)}, ${(y * 100).toFixed(1)}, ${(z * 100).toFixed(1)} cm`;
+    const text = `tool ${(x * 100).toFixed(1)}, ${(y * 100).toFixed(1)}, ${(z * 100).toFixed(1)} cm`;
+    $("tool-pose").textContent = text;
+    if ($("touch-pose")) $("touch-pose").textContent = text; // same readout, shown in the camera step too
+    (state?.arm_joints || []).forEach(({ name, label }, i) => {
+      const cell = $(`jv-${name}`);
+      if (cell && pose.joints) cell.textContent = `${label} ${((pose.joints[i] * 180) / Math.PI).toFixed(0)}°`;
+    });
   } catch {
     $("tool-pose").textContent = "tool —";
   }
 }
 
+// Press-and-hold jogging: a self-pacing loop that sends the next request only once the
+// previous one resolves (never more than one in flight, matching the backend's one-job-at-a-
+// time model), and stops the instant the pointer is released. A "still moving" response isn't
+// an error - it just means try again right away. A request that fails outright (a network
+// hiccup, not just a busy backend) is not either - the loop backs off and keeps trying for as
+// long as the button is actually held, rather than dying silently and leaving the hold looking
+// like it did nothing.
+async function postJog(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (res.status === 409) return false;
+  const ok = res.ok;
+  if (!ok) {
+    const detail = await res.json().catch(() => ({}));
+    $("error").textContent = detail.detail || `${path} failed (${res.status})`;
+  } else {
+    $("error").textContent = "";
+  }
+  return ok;
+}
+
+let jogHeld = null; // the button currently held, or null
+let toolPosePending = false; // at most one refreshToolPose() in flight, so a fast hold doesn't pile them up
+
+function throttledRefreshToolPose() {
+  if (toolPosePending) return;
+  toolPosePending = true;
+  refreshToolPose().finally(() => { toolPosePending = false; });
+}
+
+function bindHold(button, sendOne) {
+  const stop = () => { if (jogHeld === button) jogHeld = null; };
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    // Capture can throw on some browsers/pointer types; the hold must still work without it -
+    // pointerup won't fire off-button then, but the window-level fallback below still catches it.
+    try { button.setPointerCapture(event.pointerId); } catch { /* best effort */ }
+    jogHeld = button;
+    (async () => {
+      while (jogHeld === button) {
+        let ok = false;
+        try {
+          ok = await sendOne();
+        } catch (err) {
+          console.warn("jog request failed", err);
+        }
+        if (ok) throttledRefreshToolPose();
+        if (jogHeld !== button) break;
+        if (!ok) await new Promise((resolve) => setTimeout(resolve, 150)); // back off, busy or failed
+      }
+    })();
+  });
+  button.addEventListener("pointerup", stop);
+  button.addEventListener("pointercancel", stop);
+  button.addEventListener("lostpointercapture", stop);
+}
+// Safety net for when the pointer is released somewhere capture didn't follow, the window loses
+// focus, or the tab is hidden mid-hold: stop rather than risk sending commands nobody is
+// watching happen.
+window.addEventListener("pointerup", () => { jogHeld = null; });
+window.addEventListener("pointercancel", () => { jogHeld = null; });
+window.addEventListener("blur", () => { jogHeld = null; });
+document.addEventListener("visibilitychange", () => { if (document.hidden) jogHeld = null; });
+
 for (const button of document.querySelectorAll("[data-jog]")) {
-  button.addEventListener("click", async () => {
+  bindHold(button, () => {
     const step = Number($("jog-step").value) * Number(button.dataset.sign);
-    await post("/api/dev/jog", { axis: button.dataset.jog, delta_m: step });
-    setTimeout(refreshToolPose, 1200);
+    return postJog("/api/dev/jog", { axis: button.dataset.jog, delta_m: step, speed_pct: Number($("jog-speed").value) });
   });
 }
+
+// Per joint, for poses no tool target describes - posing the arm where it should wait, or
+// backing one joint off a limit. The joint list itself comes from the backend (`arm_joints`
+// on /api/state) rather than being hardcoded here, so this UI works for whatever arm the
+// backend is configured for, not just this one.
+let jointJogBuilt = false;
+function ensureJointJog() {
+  if (jointJogBuilt || !state?.arm_joints?.length) return;
+  jointJogBuilt = true;
+  $("jog-joints").innerHTML = state.arm_joints.map(({ name, label }) =>
+    `<span class="name" id="jv-${name}">${label}</span>` +
+    `<button data-joint="${name}" data-sign="-1" type="button">−</button>` +
+    `<button data-joint="${name}" data-sign="1" type="button">+</button>`).join("");
+  for (const button of document.querySelectorAll("[data-joint]")) {
+    bindHold(button, () => {
+      const step = Number($("joint-step").value) * Number(button.dataset.sign);
+      return postJog("/api/dev/jog_joint",
+        { joint: button.dataset.joint, delta_rad: step, speed_pct: Number($("jog-speed").value) });
+    });
+  }
+}
+
+$("jog-speed").addEventListener("input", () => { $("jog-speed-value").textContent = `${$("jog-speed").value}%`; });
+
 $("jaws-open").addEventListener("click", () => post("/api/dev/gripper", { open: true }));
 $("jaws-close").addEventListener("click", () => post("/api/dev/gripper", { open: false }));
 setInterval(refreshToolPose, 2000);
@@ -328,6 +421,49 @@ function newPhoto() {
   $("setup-frame").src = `/api/camera/frame.png?scale=2&t=${Date.now()}`;
 }
 
+function renderBoardResult(data) {
+  const board = data.board || {};
+  const reach = data.reach || {};
+  const outOfReach = (reach.unreachable || []).length;
+  $("setup-rotate").hidden = !reach.orientation;
+  $("board-result").textContent =
+    (reach.orientation ? `${reach.orientation} ` : "") +
+    `${board.square_size_mm} mm squares, turned ${board.yaw_deg}°, corners off by ${board.squareness_mm} mm. ` +
+    `Measure a square: if it is not ${board.square_size_mm} mm, the height above is wrong. ` +
+    (outOfReach ? `${outOfReach} squares out of reach — move the board closer.` : "Every square is reachable.");
+}
+
+// a1 is defined from White's seat, but the corners are marked on a photograph taken from
+// somewhere else, so marking the board half a turn out is easy and looks identical. The
+// server judges it by which end the robot sits at; this puts it right without re-clicking.
+async function sendCorners() {
+  const natural = { w: $("setup-frame").naturalWidth, h: $("setup-frame").naturalHeight };
+  const scale = Number(new URL($("setup-frame").src, location.origin).searchParams.get("scale") || 1);
+  const pixels = corners.map(([x, y]) => [(x / 100) * natural.w * scale, (y / 100) * natural.h * scale]);
+  const height = Number($("board-height").value || 0) / 1000;
+  const res = await fetch("/api/calibration/board", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ corners: pixels, surface_height_m: height }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { $("board-result").textContent = data.detail || "Could not use those corners."; return; }
+  renderBoardResult(data);
+  // Marking again can drop touches taken against the old labels, so re-read that list.
+  renderTouch(data.touch);
+}
+
+$("setup-rotate").addEventListener("click", async () => {
+  // The relabelling happens on the server, which moves the clicks and the touches taken
+  // against them together; these marks just follow.
+  const res = await fetch("/api/calibration/board/rotate", { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { $("board-result").textContent = data.detail || "Could not rotate the board."; return; }
+  corners.push(corners.shift(), corners.shift());
+  drawCorners();
+  renderBoardResult(data);
+  renderTouch(data.touch);
+});
+
 $("setup-frame").addEventListener("click", async (event) => {
   if (corners.length >= 4) return;
   const box = event.target.getBoundingClientRect();
@@ -336,27 +472,61 @@ $("setup-frame").addEventListener("click", async (event) => {
   corners.push([((event.clientX - box.left) / box.width) * 100, ((event.clientY - box.top) / box.height) * 100]);
   drawCorners();
   if (corners.length < 4) return;
-  const natural = { w: $("setup-frame").naturalWidth, h: $("setup-frame").naturalHeight };
-  const scale = Number(new URL($("setup-frame").src, location.origin).searchParams.get("scale") || 1);
-  const pixels = corners.map(([x, y]) => [(x / 100) * natural.w * scale, (y / 100) * natural.h * scale]);
-  const res = await fetch("/api/calibration/board", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ corners: pixels }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) { $("board-result").textContent = data.detail || "Could not use those corners."; return; }
-  const board = data.board || {};
-  const reach = data.reach || {};
-  const outOfReach = (reach.unreachable || []).length;
-  $("board-result").textContent =
-    `${board.square_size_mm} mm squares, turned ${board.yaw_deg}°, corners off by ${board.squareness_mm} mm. ` +
-    (outOfReach ? `${outOfReach} squares out of reach — move the board closer.` : "Every square is reachable.");
+  await sendCorners();
 });
 
 $("setup-refresh").addEventListener("click", newPhoto);
 $("setup-clear").addEventListener("click", newPhoto);
+// Redo the board-from-corners math against whatever was clicked last, without re-clicking -
+// for a corrected height, or after the camera step refines the camera (also done there
+// automatically, but a person may want to force it, e.g. after a bad camera fit is retried).
+$("setup-recompute").addEventListener("click", async () => {
+  const height = Number($("board-height").value || 0) / 1000;
+  const res = await fetch("/api/calibration/board/recompute", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ surface_height_m: height }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { $("board-result").textContent = data.detail || "Could not recompute."; return; }
+  renderBoardResult(data);
+});
 $("setup").addEventListener("click", () => { $("setup-dialog").showModal(); newPhoto(); });
+
+// Touch-off: the same four corners already clicked for the board step, now touched with the
+// gripper (torque released, so it can be guided by hand) so the camera pose can be fitted to
+// where they really are, not just where the description says the camera is aimed.
+let lastTouch = null;
+
+function renderTouch(touch) {
+  lastTouch = touch;
+  const el = $("touch-points");
+  if (!touch) { el.innerHTML = ""; return; }
+  el.innerHTML = touch.points.map((p) => {
+    const status = p.done ? "done" : (p.name === touch.next ? "next" : "");
+    return `<li class="${status}">${p.name}${p.done ? " ✓" : ""}</li>`;
+  }).join("");
+  $("camera-release").disabled = touch.arm_released;
+  $("camera-reactivate").disabled = !touch.arm_released;
+  $("camera-confirm").disabled = !touch.arm_released || !touch.next;
+}
+
+async function touchAction(path) {
+  const res = await fetch(path, { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { $("camera-result").textContent = data.detail || "That didn't work."; return; }
+  renderTouch(data.touch);
+}
+
+$("camera-release").addEventListener("click", () => touchAction("/api/calibration/camera/release"));
+$("camera-confirm").addEventListener("click", () => touchAction("/api/calibration/camera/touch"));
+$("camera-reactivate").addEventListener("click", () => touchAction("/api/calibration/camera/reactivate"));
+// Leaving the arm released and walking away isn't something to rely on a person to remember.
+$("setup-dialog").addEventListener("close", () => {
+  if (lastTouch?.arm_released) touchAction("/api/calibration/camera/reactivate");
+});
+
 $("setup-camera").addEventListener("click", async () => {
-  $("camera-result").textContent = "Moving the arm so the camera can see the gripper…";
+  $("camera-result").textContent = "Fitting the camera to the touched points…";
   await post("/api/calibration/camera");
 });
 $("setup-park").addEventListener("click", async () => {
@@ -385,6 +555,7 @@ async function refreshSetup() {
       `(fit within ${draft.camera.error_mean_px} px).`;
   }
   if (draft.park) $("park-result").textContent = `Saved: ${draft.park.joints.map((v) => v.toFixed(2)).join(", ")}`;
+  renderTouch(draft.touch);
 }
 setInterval(refreshSetup, 2000);
 

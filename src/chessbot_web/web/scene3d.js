@@ -274,7 +274,7 @@ export class BoardScene {
     this.geometryCache ??= new Map();
     if (!this.geometryCache.has(type)) this.geometryCache.set(type, pieceGeometries(type, this.pieceSet));
     const group = new THREE.Group();
-    for (const geometry of this.geometryCache.get(cacheKey)) {
+    for (const geometry of this.geometryCache.get(type)) {
       const mesh = new THREE.Mesh(geometry, white ? this.materials.white : this.materials.black);
       mesh.castShadow = true;
       mesh.receiveShadow = true;

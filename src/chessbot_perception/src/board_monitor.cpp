@@ -50,7 +50,7 @@ public:
   explicit BoardMonitor(const rclcpp::NodeOptions & options)
   : rclcpp::Node("board_monitor", options)
   {
-    const auto image_topic = declare_parameter<std::string>("image_topic", "/overhead_camera/image_raw");
+    const auto image_topic = declare_parameter<std::string>("image_topic", "/overhead_camera/image_rect");
     const auto info_topic = declare_parameter<std::string>("camera_info_topic", "/overhead_camera/camera_info");
     const auto service_name = declare_parameter<std::string>("service_name", "/perception/get_board_state");
     base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
@@ -172,7 +172,7 @@ private:
       std::lock_guard<std::mutex> lock(mutex_);
       info = info_;
     }
-    if (!info || info->k[0] <= 0.0) {
+    if (!info || (info->p[0] <= 0.0 && info->k[0] <= 0.0)) {
       return std::nullopt;
     }
     geometry_msgs::msg::TransformStamped t;
@@ -183,10 +183,14 @@ private:
       return std::nullopt;
     }
     Camera cam;
-    cam.fx = info->k[0];
-    cam.fy = info->k[4];
-    cam.cx = info->k[2];
-    cam.cy = info->k[5];
+    // P describes the rectified image and K the raw one. This node reads a rectified stream,
+    // so P is the matrix that matches its pixels; K is the fallback for a camera_info that
+    // carries no projection matrix. On an undistorted lens the two are identical.
+    const bool rectified = info->p[0] > 0.0;
+    cam.fx = rectified ? info->p[0] : info->k[0];
+    cam.fy = rectified ? info->p[5] : info->k[4];
+    cam.cx = rectified ? info->p[2] : info->k[2];
+    cam.cy = rectified ? info->p[6] : info->k[5];
     const auto & q = t.transform.rotation;
     const double x = q.x, y = q.y, z = q.z, w = q.w;
     cam.rotation = {
