@@ -31,7 +31,9 @@
   <arg name="brain" default="true" description="Run the brain (game engine and orchestrator)." />
   <arg name="rerun_grpc_port" default="9876" />
   <arg name="viewer" default="web" description="Rerun viewer: web (on web_viewer_port), native, or none." />
-  <arg name="rviz" default="false" description="Also open RViz: the robot, TF, the overhead image and the board." />
+  <!-- On by default where there is a screen to put it on, off on a headless robot host. -->
+  <arg name="rviz" default="$(eval '&quot;$(env DISPLAY headless)&quot; != &quot;headless&quot;')"
+       description="Open RViz: the robot, TF, the overhead image and the board." />
   <arg name="web_viewer_port" default="9090" />
   <arg name="record" default="false" description="Also archive the Rerun stream to an .rrd file in recording_dir." />
   <arg name="recording_dir" default="$(env HOME)/chessbot_recordings" />
