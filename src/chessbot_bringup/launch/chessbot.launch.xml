@@ -43,6 +43,7 @@
   <arg name="zenoh_endpoint" default="tcp/127.0.0.1:7447" description="Router for the key-value store." />
   <arg name="play_moves" default="true" description="False reports the reply without moving the arm." />
   <arg name="llm_url" default="http://127.0.0.1:8081" description="llama-server serving the reasoning model (pixi run llm)." />
+  <arg name="move_detection" default="classic" description="Which detector reads the human's move: classic (per-square occupancy) or gemma (vision-language model)." />
 
   <!-- Measured, not chosen: at 1.6 rad/s and 8 cm/s a single transfer is twice as quick and
        still lands within a millimetre, but the scenarios that move several pieces start
@@ -86,6 +87,7 @@
     <arg name="zenoh_endpoint" value="$(var zenoh_endpoint)" />
     <arg name="play_moves" value="$(var play_moves)" />
     <arg name="llm_url" value="$(var llm_url)" />
+    <arg name="move_detection" value="$(var move_detection)" />
     <arg name="joint_velocity" value="$(var joint_velocity)" />
     <arg name="cartesian_speed" value="$(var cartesian_speed)" />
   </include>

@@ -75,13 +75,22 @@ def calibration() -> dict:
 # --- world ------------------------------------------------------------------------------
 
 
+# Top of the table in chessbot_description/worlds/chessbot.sdf, metres in base_link.
+TABLE_TOP_Z = 0.0
+
+
 def respawn(board: dict, belief: dict) -> list[tuple[str, str, tuple[float, float, float]]]:
     existing = [name for name in gzsim.model_poses() if name.startswith("pc_") or name == "board"]
     for name in existing:
         gzsim.remove(name)
     paths = pieces.write_models(board["square_size_m"])
     placed = pieces.layout(belief["fen"], belief.get("graveyard", []), board)
-    models = [("board", paths["board"], tuple(board["origin_xyz"]), board["yaw_rad"])]
+    # The squares are a visual stand-in with no collision, so their height is free, and a
+    # board plane measured a few millimetres below the table would bury them in it and leave
+    # the camera looking at bare table. They go on the table surface, which is what the
+    # pieces stand on; their x, y and yaw are the measured ones.
+    ox, oy, _ = board["origin_xyz"]
+    models = [("board", paths["board"], (ox, oy, TABLE_TOP_Z), board["yaw_rad"])]
     # Pieces take the board's yaw, so knights face the opponent.
     models += [(name, paths[letter], xyz, board["yaw_rad"]) for name, letter, xyz in placed]
     gzsim.spawn(models)

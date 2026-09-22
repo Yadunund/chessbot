@@ -10,15 +10,15 @@ files, so the browser talks to one origin.
 
 Rules questions (legal moves, check) and move choice go to Stockfish over UCI
 when the binary is available; otherwise a placeholder that checks no rules.
-Not implemented yet, and said so in the thought feed: detecting the human's
-move from perception. Until then the move is passed explicitly to
-``press_clock``.
+Which move the human played is asked of a move detection service, given the
+board before and after the move; the brain supplies the position and the legal
+moves and accepts or ignores the answer, but does no reading of its own. Which
+detector answers is the ``move_detection_service`` parameter.
 """
 
 from __future__ import annotations
 
 import collections
-import json
 import math
 import os
 import threading
@@ -29,8 +29,8 @@ import rclpy
 import uvicorn
 from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from builtin_interfaces.msg import Time
-from chessbot_interfaces.msg import GameState, Thought
-from chessbot_interfaces.srv import GetBoardState, Reason
+from chessbot_interfaces.msg import BoardObservation, GameState, Thought
+from chessbot_interfaces.srv import DetectMove, GetBoardState, Reason
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -49,7 +49,6 @@ from chessbot_brain import calibration_flow as calib
 from chessbot_brain.capabilities import ArmConfig, Capabilities, CapabilityError, tool_down
 from chessbot_brain.engine import EngineError, UciEngine, choose_reply
 from chessbot_brain.geometry import PIECE_HEIGHTS, BoardGeometry, graveyard_cell
-from chessbot_brain.move_reading import read_move
 
 PHASE_NAMES = {
     GameState.PHASE_IDLE: "idle",
@@ -155,6 +154,9 @@ class BrainNode(Node):
             controller=self.declare_parameter("arm_controller_name", "arm_controller").value,
         )
         zenoh_endpoint = self.declare_parameter("zenoh_endpoint", "tcp/127.0.0.1:7447").value
+        # Which implementation of DetectMove reads the human's move. Any service of that
+        # type will do; the launch file decides which one is running under this name.
+        move_detection_service = self.declare_parameter("move_detection_service", "/perception/detect_move").value
         default_stockfish = os.path.join(os.environ.get("PIXI_PROJECT_ROOT", ""), "generated", "bin", "stockfish")
         stockfish_path = self.declare_parameter("stockfish_path", default_stockfish).value
         self.engine_movetime_ms = int(self.declare_parameter("engine_movetime_ms", 800).value)
@@ -171,7 +173,7 @@ class BrainNode(Node):
         self.robot_description = ""
         self.create_subscription(String, "/robot_description", self._on_robot_description, latched)
 
-        self.caps = Capabilities(self, arm, zenoh_endpoint)
+        self.caps = Capabilities(self, arm, zenoh_endpoint, move_detection_service)
 
         self._lock = threading.RLock()
         self._jobs = ThreadPoolExecutor(max_workers=1)
@@ -185,6 +187,9 @@ class BrainNode(Node):
         self._jog_holds: dict[str, tuple[float, list[float]]] = {}
         # What the guided calibration workflow has established so far.
         self.draft = calib.Draft()
+        # The board as it looked when the human's turn began: move detection is given
+        # both ends of the change, not just the end of it.
+        self._before = BoardObservation()
 
         self.engine: UciEngine | None = None
         if stockfish_path and os.path.isfile(stockfish_path):
@@ -436,7 +441,7 @@ class BrainNode(Node):
             self._robot_turn()
         else:
             self._switch_clock("white")
-            self.set_phase(GameState.PHASE_HUMAN_TURN)
+            self._begin_human_turn()
 
     def job_set_position(self, fen: str, robot_side: str):
         """Dev: replace the believed position (for tests), without moving anything."""
@@ -450,8 +455,10 @@ class BrainNode(Node):
         with self._lock:
             self.board = board
         self.think(Thought.EXPLAIN, f"Dev: position set to {board.fen()}.")
-        human_to_move = self.side_to_move() != robot_side
-        self.set_phase(GameState.PHASE_HUMAN_TURN if human_to_move else GameState.PHASE_IDLE)
+        if self.side_to_move() != robot_side:
+            self._begin_human_turn()
+        else:
+            self.set_phase(GameState.PHASE_IDLE)
 
     def job_press_clock(self, move: str | None):
         with self._lock:
@@ -485,94 +492,66 @@ class BrainNode(Node):
             return
         self._robot_turn()
 
-    def _read_move_from_camera(self) -> str | None:
-        """The human's move as read from the overhead camera, or None (with the reason in the thought feed)."""
+    def _observe(self, max_frame_age_s: float = 1.0) -> BoardObservation:
+        """The board as it is right now: what perception makes of it, and the picture it saw.
+
+        Both halves are optional and their absence is reported by being empty, because a
+        detector that reads pixels and one that reads occupancy need different halves and
+        neither should fail on the other's being missing.
+        """
+        observation = BoardObservation()
         try:
-            response = self.caps.board_state(max_frame_age_s=1.0)
+            response = self.caps.board_state(max_frame_age_s=max_frame_age_s)
+            if response.result == GetBoardState.Response.RESULT_OK:
+                observation.state = response.state
+            else:
+                self.get_logger().info(
+                    f"no board facts: {BOARD_RESULT_TEXT.get(response.result, 'unknown result')}")
         except CapabilityError as exc:
-            self.think(Thought.PERCEIVE, f"I can't read the board: {exc}.")
-            return None
-        if response.result != GetBoardState.Response.RESULT_OK:
-            self.think(Thought.PERCEIVE, f"I can't read the board: {BOARD_RESULT_TEXT.get(response.result, 'unknown result')}.")
-            return None
+            self.get_logger().info(f"no board facts: {exc}")
+        frame = self.caps.camera_frame()
+        if frame is not None:
+            observation.image = frame
+        return observation
+
+    def _begin_human_turn(self):
+        """Hand the turn over, and remember how the board looks before it is touched.
+
+        The snapshot is taken here rather than when the clock is pressed because by then
+        the move has already happened. It is taken after the arm has parked, so the
+        picture is of the board rather than of the arm.
+        """
+        observation = self._observe()
+        with self._lock:
+            self._before = observation
+        self.set_phase(GameState.PHASE_HUMAN_TURN)
+
+    def _read_move_from_camera(self) -> str | None:
+        """The human's move as the detection service reads it, or None (with the reason in the thought feed)."""
         if self.engine is None:
             self.think(Thought.PERCEIVE, "I can't read your move without the rules engine.")
             return None
         with self._lock:
-            board = Board(self.board.fen())
-        legal = self.engine.legal_moves(board.fen())
-        reading = read_move(board, legal, list(response.state.squares), list(response.state.confidence))
-        if reading.move is None and len(reading.candidates) >= 2 and reading.changed:
-            self.think(Thought.PERCEIVE, f"I couldn't tell your move ({reading.reason}); asking Gemma to look.")
-            choice = self._tiebreak(board, [move for move, _ in reading.candidates], legal)
-            if choice is not None:
-                return choice
-        if reading.move is None:
-            self.think(Thought.PERCEIVE, f"I couldn't tell your move: {reading.reason}.")
-            return None
-        self.think(Thought.PERCEIVE, f"I saw {reading.move}: {reading.reason}.")
-        return reading.move
-
-    def _ask_which_move(self, board: Board, frame, candidates: list[str]) -> tuple[str | None, float]:
-        """Ask the model which of `candidates` the image shows. Returns (move, confidence)."""
-        schema = {
-            "type": "object",
-            "properties": {"move": {"enum": [*candidates, "unclear"]}, "confidence": {"type": "number"}},
-            "required": ["move", "confidence"],
-        }
-        prompt = (
-            f"The image is the overhead camera view of a chess board. Before the human's move the position was "
-            f"(FEN) {board.fen()}. {'White' if board.white_to_move else 'Black'} just moved. Which of these moves "
-            f"(UCI notation) does the image show: {', '.join(candidates)}? Answer 'unclear' if you cannot tell."
-        )
+            fen = self.board.fen()
+            before = self._before
+        request = DetectMove.Request(
+            fen_before=fen, legal_moves=self.engine.legal_moves(fen), before=before, after=self._observe())
         try:
-            answer = self.caps.reason(Reason.Request.ROLE_MOVE_TIEBREAK, prompt, [frame], json.dumps(schema))
-        except CapabilityError:
-            answer = None
-        if answer is None:
-            return None, 0.0
-        try:
-            parsed = json.loads(answer.text)
-        except json.JSONDecodeError:
-            self.think(Thought.PERCEIVE, f"Gemma's answer wasn't readable: {answer.text[:80]!r}.")
-            return None, 0.0
-        return parsed.get("move"), float(parsed.get("confidence", 0.0))
-
-    def _tiebreak(self, board: Board, candidates: list[str], legal: list[str]) -> str | None:
-        """Gemma picks which candidate move the image shows, if it can be shown to be looking.
-
-        A vision model asked to choose between plausible chess moves can answer from what the
-        opening book makes likely rather than from the image, and sound no less sure for it. So
-        its answer only counts if it also declines a decoy - the same question with every real
-        candidate replaced by moves that are legal but were not played. A model that picks one
-        of those is guessing, and is not trusted for this frame.
-        """
-        frame = self.caps.camera_frame()
-        if frame is None:
-            self.think(Thought.PERCEIVE, "No camera frame to show Gemma.")
-            return None
-        move, confidence = self._ask_which_move(board, frame, candidates)
-        if move is None and confidence == 0.0:
-            self.think(Thought.PERCEIVE, "Gemma isn't available to look.")
-            return None
-        if move not in candidates or confidence < 0.7:
-            self.think(Thought.PERCEIVE, f"Gemma couldn't tell either ({move}, confidence {confidence:.2f}).",
-                       model_generated=True)
+            response = self.caps.detect_move(request)
+        except CapabilityError as exc:
+            self.think(Thought.PERCEIVE, f"I can't read your move: {exc}.")
             return None
 
-        decoys = [m for m in legal if m not in candidates][: len(candidates)]
-        if decoys:
-            decoy_move, decoy_confidence = self._ask_which_move(board, frame, decoys)
-            if decoy_move in decoys and decoy_confidence >= 0.7:
-                self.think(
-                    Thought.PERCEIVE,
-                    f"Gemma answered {move} but also picked {decoy_move} from moves you did not play, "
-                    "so it is guessing rather than looking.",
-                    model_generated=True,
-                )
-                return None
-        self.think(Thought.PERCEIVE, f"Gemma says you played {move} (confidence {confidence:.2f}).", model_generated=True)
-        return move
+        if response.result == DetectMove.Response.RESULT_OK:
+            self.think(Thought.PERCEIVE, f"I saw {response.move}: {response.reason}.",
+                       model_generated=response.model_used)
+            return response.move
+        trouble = {
+            DetectMove.Response.RESULT_NO_BOARD: "I can't read the board",
+            DetectMove.Response.RESULT_FAILED: "move detection failed",
+        }.get(response.result, "I couldn't tell your move")
+        self.think(Thought.PERCEIVE, f"{trouble}: {response.reason}.", model_generated=response.model_used)
+        return None
 
     def _comment_on(self, fen_before: str, human_move: str | None, reply: str):
         """A sentence or two explaining the robot's move, in the thought feed. Runs in the background."""
@@ -658,7 +637,7 @@ class BrainNode(Node):
                 self.moves.append(reply)
             self._switch_clock("white" if self.robot_side == "black" else "black")
             if not self._game_over():
-                self.set_phase(GameState.PHASE_HUMAN_TURN)
+                self._begin_human_turn()
             return
 
         self.set_phase(GameState.PHASE_MOVING)
@@ -684,7 +663,7 @@ class BrainNode(Node):
             return
 
         self._switch_clock("white" if self.robot_side == "black" else "black")
-        self.set_phase(GameState.PHASE_HUMAN_TURN)
+        self._begin_human_turn()
         self.think(Thought.EXPLAIN, "Your move. Press the clock when you're done.")
 
     def job_calibrate(self):
@@ -729,7 +708,7 @@ class BrainNode(Node):
         if self.side_to_move() != self.robot_side:
             self.think(Thought.RECOVER, "Resumed. It is your move.")
             self._switch_clock(self.side_to_move())
-            self.set_phase(GameState.PHASE_HUMAN_TURN)
+            self._begin_human_turn()
             return
         self.think(Thought.RECOVER, "Resumed, and the move is still mine. Check the board matches "
                                     "the position shown before I play it again.")

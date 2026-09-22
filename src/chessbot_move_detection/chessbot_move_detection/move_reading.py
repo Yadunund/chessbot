@@ -26,6 +26,16 @@ class MoveReading:
     changed: list[str] = field(default_factory=list)  # squares that differ from the believed position
 
 
+def candidate_key(move: str) -> str:
+    """Moves the board cannot tell apart, under one name: promotions differ only in the piece."""
+    return move[:4] + ("q" if len(move) > 4 else "")
+
+
+def moves_between(legal_moves: list[str], source: str, destination: str) -> list[str]:
+    """The legal moves from `source` to `destination`, promotions collapsed to one."""
+    return sorted({candidate_key(m) for m in legal_moves if m[:2] == source and m[2:4] == destination})
+
+
 def occupancy(board: Board) -> list[int]:
     return [EMPTY if p is None else (WHITE if p.isupper() else BLACK) for p in board.squares]
 
@@ -54,7 +64,7 @@ def read_move(
 
     candidates: dict[str, float] = {}
     for move in legal_moves:
-        key = move[:4] + ("q" if len(move) > 4 else "")
+        key = candidate_key(move)
         if key in candidates:
             continue
         after = Board(board.fen())

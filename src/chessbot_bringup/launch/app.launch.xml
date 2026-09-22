@@ -21,6 +21,7 @@
   <arg name="zenoh_endpoint" default="tcp/127.0.0.1:7447" description="Router for the key-value store." />
   <arg name="play_moves" default="true" description="False reports the reply without moving the arm." />
   <arg name="llm_url" default="http://127.0.0.1:8081" description="llama-server serving the reasoning model (pixi run llm)." />
+  <arg name="move_detection" default="classic" description="Which detector reads the human's move: classic (per-square occupancy) or gemma (vision-language model)." />
   <arg name="joint_velocity" default="0.8" description="Top joint speed, rad/s." />
   <arg name="cartesian_speed" default="0.04" description="Top tool speed along a path, m/s." />
 
@@ -32,6 +33,12 @@
       <extra_arg name="use_intra_process_comms" value="true" />
     </composable_node>
   </load_composable_node>
+
+  <!-- Move detection: which move the human played, from the board before and after it.
+       Both detectors serve the same service, so which one is running is the whole choice. -->
+  <node pkg="chessbot_move_detection" exec="$(var move_detection)_detector" name="move_detector" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)" />
+  </node>
 
   <!-- Rerun bridge: ROS topics to the viewer and to an .rrd archive. -->
   <group if="$(var rerun)">

@@ -87,6 +87,7 @@ storage that acts as a shared key-value store.
 |---|---|---|---|
 | Brain | `chessbot_brain` | Python | Owns the game: position, moves, clocks, phase. Composes capabilities into skills. Publishes game state and a readable thought feed. Serves the REST API and the UI. |
 | Perception | `chessbot_perception` | C++ | Turns overhead camera frames into board facts (`GetBoardState`: empty / white / black per square), only when asked. |
+| Move detection | `chessbot_move_detection` | Python | Serves `DetectMove`: which move the human played, given the position, the legal moves, and the board before and after. Two interchangeable implementations, one reading occupancy and one reading pixels with a model. |
 | Reasoning | `chessbot_inference` | Python | Serves the `Reason` service from Gemma 4 in `llama-server`, on this host or another. Advises; never decides. |
 | Motion | `chessbot_motion` | Python | IK and Cartesian paths behind MoveIt's standard services, using Pinocchio. |
 | Control | ros2_control | C++ | `joint_trajectory_controller` for the arm, `parallel_gripper_action_controller` for the gripper, `joint_state_broadcaster`. Gazebo, mock or real hardware behind the same controllers. |
@@ -95,7 +96,7 @@ storage that acts as a shared key-value store.
 | UI | `chessbot_web` | JS | Plain HTML, CSS and JavaScript, no build step. three.js for the 3D view. |
 | Description | `chessbot_description` | URDF | SO-101 with overhead and wrist cameras, ros2_control tags, simulation world. |
 | Bringup | `chessbot_bringup` | XML launch | Launch files and configuration. |
-| Interfaces | `chessbot_interfaces` | IDL | `GameState`, `Thought`, `BoardState`, `GetBoardState`, `Reason`, `SetCalibration`, `Calibrate`. |
+| Interfaces | `chessbot_interfaces` | IDL | `GameState`, `Thought`, `BoardState`, `BoardObservation`, `GetBoardState`, `DetectMove`, `Reason`, `SetCalibration`, `Calibrate`. |
 
 ## The brain
 
@@ -193,12 +194,21 @@ the real IK.
 2. **What they look like:** whenever the human's turn begins (the robot has finished and parked, or a new
    game has started), the believed position can be trusted, so perception records each square's colour
    with its believed label, per square and pooled over light and dark squares.
-3. **On the clock press:** the brain calls `GetBoardState`. Each square is classified by colour distance to
-   those references, with a confidence.
-4. **Which move:** the brain compares the observed occupancy with the occupancy each legal move would leave,
-   weighted by confidence, and accepts the best only if it fits well and clearly beats the next.
-5. **When it can't tell:** Gemma looks at the camera image and picks among the candidate moves (or says
-   it's unclear); its answer is used only when it is confident. Otherwise the player types the move.
+3. **On the clock press:** the brain calls `GetBoardState` and grabs the camera frame, and sends both -
+   together with the board it snapshotted when the turn was handed over - to `DetectMove`, along with the
+   position and the moves the rules allow. The brain reads nothing itself: it supplies the facts, and
+   accepts or ignores the one move that comes back.
+4. **Which move:** `classic_detector` compares the observed occupancy with the occupancy each legal move
+   would leave, weighted by confidence, and accepts the best only if it fits well and clearly beats the
+   next. When two candidates tie, Gemma looks at the picture and chooses between them, subject to the
+   decoy control: the same question asked again with the true candidates removed, and the
+   answer discarded if the model still picks confidently.
+5. **The other detector:** `gemma_detector` answers the same question from the two photographs alone. It is
+   never asked to name a move - only which square a piece left and which it arrived on, which is a question
+   about pixels rather than about chess - and the answer is resolved back to a legal move deterministically.
+6. **Which one runs:** `move_detection:=classic|gemma` at launch, and `move_detection_service` on the brain.
+   Both serve the same service, so the brain does not know or care which answered.
+7. **When it can't tell:** the player types the move.
 
 ## Reasoning
 
@@ -210,7 +220,7 @@ server everything still works.
 | Role | When | Output |
 |---|---|---|
 | Commentary | after each robot move, in the background | a sentence or two in the thought feed, marked model-generated, grounded in the moves played |
-| Move tiebreak | the camera reading is ambiguous | one of the legal candidates or "unclear" (JSON schema), used only when confident |
+| Move tiebreak | the camera reading is ambiguous, or `gemma_detector` is the detector in use | a candidate move, or the squares a piece left and arrived on, or "unclear" (JSON schema). Believed only when confident, and only when the same question with the true answer removed is declined |
 | Explain | (next) an illegal or odd move | a friendly sentence built from rules-engine facts |
 
 ## Seeing the robot's belief
@@ -362,8 +372,6 @@ the thought feed; the Rerun debug view.
 
 **Next:**
 
-- a board and pieces in simulation
-- camera move detection, triggered by the clock press
 - calibration measurement
 - promotion piece swaps
 - a vision-language model for reasoning, cheat checks and board disagreements

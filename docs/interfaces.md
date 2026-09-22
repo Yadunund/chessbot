@@ -18,6 +18,7 @@ contract. For example, `chessbot_motion` could be replaced by MoveIt.
 | Joint state | `/joint_states` | `sensor_msgs/JointState` topic | ros2_control `joint_state_broadcaster` | motion, brain, Rerun bridge, UI 3D view |
 | Transforms | `/tf`, `/tf_static` | `tf2_msgs/TFMessage` | robot_state_publisher | anyone |
 | Board facts | `/perception/get_board_state` | `chessbot_interfaces/srv/GetBoardState` | `chessbot_perception` (C++, in `robot_io`) | brain |
+| The human's move | `/perception/detect_move` | `chessbot_interfaces/srv/DetectMove` | `chessbot_move_detection`: `classic_detector` or `gemma_detector`, whichever `move_detection` launched | brain |
 | IK | `/compute_ik` | `moveit_msgs/srv/GetPositionIK` | `chessbot_motion` | brain |
 | Cartesian paths | `/compute_cartesian_path` | `moveit_msgs/srv/GetCartesianPath` | `chessbot_motion` | brain |
 | Arm motion | `/arm_controller/follow_joint_trajectory` | `control_msgs/action/FollowJointTrajectory` | ros2_control `joint_trajectory_controller` | brain |
@@ -39,7 +40,7 @@ contract. For example, `chessbot_motion` could be replaced by MoveIt.
 | GET | `/api/robot_description` | — | the latest `/robot_description` URDF, for the UI's 3D view (503 until received) |
 | GET | `/packages/<package>/<path>` | — | package files for the browser: the URDF's `package://` meshes, and `chessbot_description/pieces/pieces.json` (the piece set the UI draws). Meshes and JSON only |
 | POST | `/api/new_game` | `{"robot_side": "black"\|"white", "engine_elo": 0}` | reset the game; the robot moves first if white |
-| POST | `/api/press_clock` | `{"move": "e2e4"}` (optional) | end the human's turn. Until camera move detection exists, the move must be given |
+| POST | `/api/press_clock` | `{"move": "e2e4"}` (optional) | end the human's turn. The move is read from the camera through `DetectMove`; giving it explicitly overrides what was read, and is the fallback when nothing could be read |
 | POST | `/api/calibrate` | — | run the calibration action |
 | POST | `/api/park` | — | park the arm |
 | POST | `/api/resume` | — | leave `needs_help` and hand the turn to the human |
@@ -54,6 +55,10 @@ Jobs run one at a time. A command arriving while one runs gets HTTP 409.
 - **Board frame:** origin at the outer corner of a1 on the playing surface, +x towards the h-file, +y towards rank 8, +z up. Its pose in `base_link` comes from calibration.
 - **Motion targets:** the tool's approach direction is the target pose's +Z axis. `(1, 0, 0, 0)` points it straight down. Roll about that axis is free (5-DoF arm).
 - **Perception answers** carry the header (stamp and frame) of the camera frame they came from.
+- **Move detection is a swap, not a fork.** Every implementation of `DetectMove` gets the same request
+  and owes the same answer: one of the legal moves it was given, or nothing. It never proposes a move
+  of its own, and it never decides what happens next. Pointing the brain at another one is a launch
+  argument (`move_detection`) rather than a change to the brain.
 
 ## Known issue
 On Lyrical with rmw_zenoh, a C++ service created in a separately created callback group was never executed, while subscriptions in such groups work. `chessbot_perception` therefore keeps its service in the default group.

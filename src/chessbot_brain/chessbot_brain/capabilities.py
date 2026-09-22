@@ -19,8 +19,6 @@ import zlib
 from dataclasses import dataclass
 
 import zenoh
-from chessbot_interfaces.action import Calibrate
-from chessbot_interfaces.srv import GetBoardState, Reason, SetCalibration
 from control_msgs.action import FollowJointTrajectory, ParallelGripperCommand
 from controller_manager_msgs.srv import SetHardwareComponentState, SwitchController
 from geometry_msgs.msg import Pose, PoseStamped
@@ -30,12 +28,14 @@ from moveit_msgs.srv import GetCartesianPath, GetPositionIK
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
-from rclpy.time import Time
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+from rclpy.time import Time
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, JointState
 from tf2_ros import Buffer, TransformException, TransformListener
-from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+from chessbot_interfaces.action import Calibrate
+from chessbot_interfaces.srv import DetectMove, GetBoardState, Reason, SetCalibration
 
 # Tool Z pointing straight down: 180 degrees about X.
 DOWN = (1.0, 0.0, 0.0, 0.0)
@@ -88,7 +88,7 @@ def open_zenoh(config, endpoint: str, logger=None, timeout_s: float = 30.0):
     while True:
         try:
             return zenoh.open(config)
-        except Exception as exc:  # noqa: BLE001 - any failure to reach the router
+        except Exception as exc:
             if time.monotonic() >= deadline:
                 raise CapabilityError(
                     f"no Zenoh router at {endpoint} after {timeout_s:.0f}s; start one with `pixi run router`"
@@ -147,7 +147,7 @@ class ArmConfig:
 
 
 class Capabilities:
-    def __init__(self, node: Node, arm: ArmConfig, zenoh_endpoint: str):
+    def __init__(self, node: Node, arm: ArmConfig, zenoh_endpoint: str, move_detection_service: str):
         self.node = node
         self.arm = arm
         self._joint_lock = threading.Lock()
@@ -157,6 +157,9 @@ class Capabilities:
         self.tf_listener = TransformListener(self.tf_buffer, node)
 
         self.perception = node.create_client(GetBoardState, "/perception/get_board_state")
+        # Which move detector answers is a launch decision, so the endpoint is a parameter:
+        # every implementation of DetectMove is interchangeable here.
+        self.move_detector = node.create_client(DetectMove, move_detection_service)
         self.reasoner = node.create_client(Reason, "/inference/reason")
         self.ik = node.create_client(GetPositionIK, "/compute_ik")
         self.cartesian = node.create_client(GetCartesianPath, "/compute_cartesian_path")
@@ -211,6 +214,7 @@ class Capabilities:
         """Which capabilities are reachable right now (for the UI and checks)."""
         return {
             "perception": self.perception.service_is_ready(),
+            "move_detection": self.move_detector.service_is_ready(),
             "ik": self.ik.service_is_ready(),
             "cartesian_path": self.cartesian.service_is_ready(),
             "arm_controller": self.arm_action.server_is_ready(),
@@ -252,6 +256,12 @@ class Capabilities:
             raise CapabilityError("perception is not available")
         request = GetBoardState.Request(max_frame_age_s=max_frame_age_s)
         return _wait(self.perception.call_async(request), 5.0, "perception")
+
+    def detect_move(self, request: DetectMove.Request, timeout_s: float = 120.0) -> DetectMove.Response:
+        """Which move the human played. The timeout is generous: a detector may be a model."""
+        if not self.move_detector.wait_for_service(timeout_sec=2.0):
+            raise CapabilityError("move detection is not available")
+        return _wait(self.move_detector.call_async(request), timeout_s, "move detection")
 
     # --- reasoning ----------------------------------------------------------------------
 

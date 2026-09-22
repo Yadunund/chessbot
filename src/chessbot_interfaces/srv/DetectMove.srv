@@ -1,0 +1,43 @@
+# Work out which move a human played, from the board before and after it.
+#
+# The caller owns the game: it supplies the position and the moves the rules allow,
+# and the answer is one of those or nothing. The service owns only the reading of
+# the board, so how the reading is done - classifying pixels per square, asking a
+# vision-language model - can be swapped by pointing the caller at another endpoint.
+
+# The position before the move, in FEN. The side to move is the one that just moved.
+string fen_before
+
+# The moves the rules allow in that position, UCI. The answer is one of these.
+# Promotions are spelled with the piece, e.g. e7e8q.
+string[] legal_moves
+
+# The board as perception saw it when the turn was handed over, and now.
+BoardObservation before
+BoardObservation after
+---
+uint8 RESULT_OK=0        # `move` is what was played
+uint8 RESULT_UNCLEAR=1   # the board was read, but no single legal move explains it
+uint8 RESULT_NO_BOARD=2  # the board could not be read at all
+uint8 RESULT_FAILED=3    # the detector failed: bad input, or a model it needs is unreachable
+uint8 result
+
+# The move in UCI, empty unless result is RESULT_OK.
+string move
+
+# 0.0 to 1.0. A reason to ask for help sooner, never evidence on its own.
+float32 confidence
+
+# Why this answer, in a sentence, for the thought feed.
+string reason
+
+# What was considered, best first, with how badly each fitted the observation
+# (lower is better). Same length, for logging and for the UI.
+string[] candidates
+float32[] scores
+
+# True when a language model's answer decided this, so the caller can say so.
+bool model_used
+
+# How long the detection took, seconds.
+float32 latency_s

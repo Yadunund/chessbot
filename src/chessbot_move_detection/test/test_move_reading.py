@@ -1,7 +1,7 @@
 # Copyright 2026 Yadunund Vijay
 # SPDX-License-Identifier: Apache-2.0
 from chessbot_brain.board import Board
-from chessbot_brain.move_reading import UNKNOWN, occupancy, read_move
+from chessbot_move_detection.move_reading import UNKNOWN, moves_between, occupancy, read_move
 
 START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
@@ -66,3 +66,10 @@ def test_unknown_squares_do_not_count_against_a_move():
     observed[0] = UNKNOWN  # a1 could not be seen
     reading = read_move(Board(START), ["g1f3", "g1h3", "e2e4"], observed, conf)
     assert reading.move == "g1f3"
+
+
+def test_moves_between_collapses_promotions():
+    legal = ["e7e8q", "e7e8r", "e7e8b", "e7e8n", "e7d8q", "e1d1"]
+    assert moves_between(legal, "e7", "e8") == ["e7e8q"]
+    assert moves_between(legal, "e7", "d8") == ["e7d8q"]
+    assert moves_between(legal, "a1", "a2") == []

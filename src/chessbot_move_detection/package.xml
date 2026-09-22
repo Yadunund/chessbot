@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>chessbot_move_detection</name>
+  <version>0.1.0</version>
+  <description>
+    Move detection: serves DetectMove, naming the move a human played from the board
+    before and after it. Two implementations of the same service answer the same
+    question differently - one classifies each square, one asks a vision-language
+    model - so the brain can be pointed at either.
+  </description>
+  <maintainer email="yadunund@gmail.com">Yadunund Vijay</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>chessbot_interfaces</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <!-- The rules of chess: applying a candidate move to a position. -->
+  <exec_depend>chessbot_brain</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

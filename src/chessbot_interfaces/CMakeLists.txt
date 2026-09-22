@@ -8,9 +8,11 @@ find_package(sensor_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  msg/BoardObservation.msg
   msg/BoardState.msg
   msg/GameState.msg
   msg/Thought.msg
+  srv/DetectMove.srv
   srv/GetBoardState.srv
   srv/Reason.srv
   srv/SetCalibration.srv
