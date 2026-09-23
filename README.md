@@ -1,5 +1,8 @@
 <h1 align="center">chessbot</h1>
 
+> [!WARNING]
+> **This project is a work in progress.** Expect rough edges and breaking changes.
+
 <p align="center">
   <b>Play chess against a real robot arm, on a real board.</b><br/>
   Move your piece, press the clock, and watch the robot look, think and reply.
